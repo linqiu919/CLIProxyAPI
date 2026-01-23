@@ -2,6 +2,38 @@
 
 ## [Unreleased]
 
+### Changed - 前端资源嵌入方式改造
+
+**原因：** 解决 single-file 方式构建时页面加载 pending 的问题，改用更灵活的 embed.FS 嵌入整个 dist 目录。
+
+**修改文件：**
+- `web/vite.config.ts` - 移除 `vite-plugin-singlefile` 插件
+- `web/package.json` - 移除 `copy-to-embed` 脚本和 `vite-plugin-singlefile` 依赖
+- `internal/managementasset/embed.go` - 改用 `embed.FS` 嵌入整个 dist 目录
+- `internal/api/server.go` - 新增 `serveManagementAssets` 方法服务静态资源
+- `Dockerfile` - 复制整个 dist 目录而非单个 HTML 文件
+
+**变更内容：**
+
+1. **前端构建方式：**
+   - 移除 single-file 插件，改用 Vite 标准多文件输出
+   - 输出结构：`dist/index.html` + `dist/assets/*.js` + `dist/assets/*.css`
+
+2. **后端嵌入方式：**
+   - 使用 `embed.FS` 嵌入整个 `dist` 目录
+   - 提供 `DistFS()` 函数返回嵌入的文件系统
+   - 保留 `EmbeddedHTML()` 函数用于兼容
+
+3. **静态资源服务：**
+   - 新增 `/assets/*filepath` 路由服务 JS/CSS 等静态资源
+   - 根据文件后缀自动设置 Content-Type
+
+4. **目录结构变更：**
+   - 移除 `internal/managementasset/static/` 目录
+   - 新增 `internal/managementasset/dist/` 目录（含占位文件）
+
+---
+
 ### Added - Deno 代理相关功能增强
 
 **修改文件：**

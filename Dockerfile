@@ -27,7 +27,7 @@ RUN go mod download
 COPY . .
 
 # Copy frontend build output to embed directory
-COPY --from=frontend-builder /app/web/dist/index.html ./internal/managementasset/static/management.html
+COPY --from=frontend-builder /app/web/dist ./internal/managementasset/dist
 
 ARG VERSION=dev
 ARG COMMIT=none

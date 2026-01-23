@@ -9,6 +9,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -309,6 +310,8 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 // It defines the endpoints and associates them with their respective handlers.
 func (s *Server) setupRoutes() {
 	s.engine.GET("/management.html", s.serveManagementControlPanel)
+	// Serve embedded static assets (JS, CSS, etc.)
+	s.engine.GET("/assets/*filepath", s.serveManagementAssets)
 	openaiHandlers := openai.NewOpenAIAPIHandler(s.handlers)
 	geminiHandlers := gemini.NewGeminiAPIHandler(s.handlers)
 	geminiCLIHandlers := gemini.NewGeminiCLIAPIHandler(s.handlers)
@@ -646,7 +649,7 @@ func (s *Server) serveManagementControlPanel(c *gin.Context) {
 		return
 	}
 
-	// Priority 1: Use embedded management HTML if available
+	// Priority 1: Use embedded index.html if available
 	if embeddedHTML := managementasset.EmbeddedHTML(); embeddedHTML != nil {
 		c.Data(http.StatusOK, "text/html; charset=utf-8", embeddedHTML)
 		return
@@ -672,6 +675,58 @@ func (s *Server) serveManagementControlPanel(c *gin.Context) {
 	}
 
 	c.File(filePath)
+}
+
+func (s *Server) serveManagementAssets(c *gin.Context) {
+	cfg := s.cfg
+	if cfg == nil || cfg.RemoteManagement.DisableControlPanel {
+		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
+
+	// Get the file path from the URL
+	filePath := c.Param("filepath")
+	if filePath == "" {
+		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
+
+	// Remove leading slash
+	filePath = strings.TrimPrefix(filePath, "/")
+
+	// Use embedded FS if available
+	distFS := managementasset.DistFS()
+	if distFS != nil {
+		assetPath := "assets/" + filePath
+		data, err := fs.ReadFile(distFS, assetPath)
+		if err != nil {
+			c.AbortWithStatus(http.StatusNotFound)
+			return
+		}
+
+		// Determine content type
+		contentType := "application/octet-stream"
+		if strings.HasSuffix(filePath, ".js") {
+			contentType = "application/javascript; charset=utf-8"
+		} else if strings.HasSuffix(filePath, ".css") {
+			contentType = "text/css; charset=utf-8"
+		} else if strings.HasSuffix(filePath, ".svg") {
+			contentType = "image/svg+xml"
+		} else if strings.HasSuffix(filePath, ".png") {
+			contentType = "image/png"
+		} else if strings.HasSuffix(filePath, ".jpg") || strings.HasSuffix(filePath, ".jpeg") {
+			contentType = "image/jpeg"
+		} else if strings.HasSuffix(filePath, ".woff") {
+			contentType = "font/woff"
+		} else if strings.HasSuffix(filePath, ".woff2") {
+			contentType = "font/woff2"
+		}
+
+		c.Data(http.StatusOK, contentType, data)
+		return
+	}
+
+	c.AbortWithStatus(http.StatusNotFound)
 }
 
 func (s *Server) enableKeepAlive(timeout time.Duration, onTimeout func()) {
