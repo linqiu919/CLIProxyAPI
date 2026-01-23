@@ -12,7 +12,8 @@ COPY web/ ./
 ARG VERSION=dev
 ENV VERSION=${VERSION}
 
-RUN npm run build
+# Run tsc and vite build directly, skip copy-to-embed (handled by COPY below)
+RUN npx tsc && npx vite build
 
 # Stage 2: Build backend
 FROM golang:1.24-alpine AS builder
