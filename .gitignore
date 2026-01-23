@@ -21,6 +21,14 @@ objectstore/*
 # Static assets
 static/*
 
+# Embedded management panel (built from web/)
+internal/managementasset/static/management.html
+!internal/managementasset/static/.gitkeep
+
+# Web frontend build output
+web/dist/*
+web/node_modules/*
+
 # Authentication data
 auths/*
 !auths/.gitkeep

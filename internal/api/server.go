@@ -610,6 +610,10 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/auth-files/download", s.mgmt.DownloadAuthFile)
 		mgmt.POST("/auth-files", s.mgmt.UploadAuthFile)
 		mgmt.DELETE("/auth-files", s.mgmt.DeleteAuthFile)
+		mgmt.GET("/auth-files/deno-proxy", s.mgmt.GetDenoProxyConfig)
+		mgmt.PUT("/auth-files/deno-proxy", s.mgmt.SetDenoProxyConfig)
+		mgmt.POST("/auth-files/deno-proxy", s.mgmt.SetDenoProxyConfig)
+		mgmt.DELETE("/auth-files/deno-proxy", s.mgmt.DeleteDenoProxyConfig)
 		mgmt.POST("/vertex/import", s.mgmt.ImportVertexCredential)
 
 		mgmt.GET("/anthropic-auth-url", s.mgmt.RequestAnthropicToken)
@@ -640,6 +644,14 @@ func (s *Server) serveManagementControlPanel(c *gin.Context) {
 		c.AbortWithStatus(http.StatusNotFound)
 		return
 	}
+
+	// Priority 1: Use embedded management HTML if available
+	if embeddedHTML := managementasset.EmbeddedHTML(); embeddedHTML != nil {
+		c.Data(http.StatusOK, "text/html; charset=utf-8", embeddedHTML)
+		return
+	}
+
+	// Priority 2: Use local file
 	filePath := managementasset.FilePath(s.configFilePath)
 	if strings.TrimSpace(filePath) == "" {
 		c.AbortWithStatus(http.StatusNotFound)

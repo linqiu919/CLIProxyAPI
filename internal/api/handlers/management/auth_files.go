@@ -432,6 +432,12 @@ func (h *Handler) buildAuthFileEntry(auth *coreauth.Auth) gin.H {
 	if claims := extractCodexIDTokenClaims(auth); claims != nil {
 		entry["id_token"] = claims
 	}
+	// Add Deno proxy configuration if present
+	if auth.Attributes != nil {
+		if denoHost := strings.TrimSpace(auth.Attributes["deno_proxy_host"]); denoHost != "" {
+			entry["deno_proxy_host"] = denoHost
+		}
+	}
 	return entry
 }
 
@@ -720,6 +726,13 @@ func (h *Handler) registerAuthFromFile(ctx context.Context, path string, data []
 	attr := map[string]string{
 		"path":   path,
 		"source": path,
+	}
+	// Preserve Deno proxy configuration from the auth file
+	if denoHost, ok := metadata["deno_proxy_host"].(string); ok && denoHost != "" {
+		attr["deno_proxy_host"] = denoHost
+	}
+	if denoServerType, ok := metadata["deno_proxy_server_type"].(string); ok && denoServerType != "" {
+		attr["deno_proxy_server_type"] = denoServerType
 	}
 	auth := &coreauth.Auth{
 		ID:         authID,
@@ -2316,4 +2329,250 @@ func (h *Handler) GetAuthStatus(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "wait"})
+}
+
+// DenoProxyConfig represents the Deno proxy configuration for an auth file.
+type DenoProxyConfig struct {
+	DenoHost string `json:"deno_host"`
+}
+
+// GetDenoProxyConfig returns the Deno proxy configuration for a specific auth file.
+func (h *Handler) GetDenoProxyConfig(c *gin.Context) {
+	authID := c.Query("id")
+	if authID == "" {
+		authID = c.Query("name")
+	}
+	if authID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "id or name is required"})
+		return
+	}
+
+	if h.authManager == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "auth manager unavailable"})
+		return
+	}
+
+	auth, ok := h.authManager.GetByID(authID)
+	if !ok {
+		// Try by filename
+		auths := h.authManager.List()
+		for _, a := range auths {
+			if a.FileName == authID {
+				auth = a
+				ok = true
+				break
+			}
+		}
+	}
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "auth not found"})
+		return
+	}
+
+	config := DenoProxyConfig{}
+	if auth.Attributes != nil {
+		config.DenoHost = strings.TrimSpace(auth.Attributes["deno_proxy_host"])
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"id":        auth.ID,
+		"deno_host": config.DenoHost,
+		"enabled":   config.DenoHost != "",
+	})
+}
+
+// SetDenoProxyConfigRequest is the request body for setting Deno proxy config.
+type SetDenoProxyConfigRequest struct {
+	IDs      []string `json:"ids"`
+	DenoHost string   `json:"deno_host"`
+}
+
+// SetDenoProxyConfig sets the Deno proxy configuration for one or more auth files.
+func (h *Handler) SetDenoProxyConfig(c *gin.Context) {
+	if h.authManager == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "auth manager unavailable"})
+		return
+	}
+
+	var req SetDenoProxyConfigRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	if len(req.IDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ids is required"})
+		return
+	}
+
+	denoHost := strings.TrimSpace(req.DenoHost)
+	ctx := c.Request.Context()
+	updated := make([]string, 0, len(req.IDs))
+	failed := make([]string, 0)
+
+	for _, authID := range req.IDs {
+		authID = strings.TrimSpace(authID)
+		if authID == "" {
+			continue
+		}
+
+		auth, ok := h.authManager.GetByID(authID)
+		if !ok {
+			// Try by filename
+			auths := h.authManager.List()
+			for _, a := range auths {
+				if a.FileName == authID {
+					auth = a
+					ok = true
+					break
+				}
+			}
+		}
+		if !ok {
+			failed = append(failed, authID)
+			continue
+		}
+
+		// Update attributes
+		if auth.Attributes == nil {
+			auth.Attributes = make(map[string]string)
+		}
+
+		if denoHost == "" {
+			// Remove Deno proxy config
+			delete(auth.Attributes, "deno_proxy_host")
+			delete(auth.Attributes, "deno_proxy_server_type")
+		} else {
+			auth.Attributes["deno_proxy_host"] = denoHost
+			// Remove server_type as it's now auto-detected from request URL
+			delete(auth.Attributes, "deno_proxy_server_type")
+		}
+
+		auth.UpdatedAt = time.Now()
+
+		if _, err := h.authManager.Update(ctx, auth); err != nil {
+			log.WithError(err).Errorf("failed to update auth %s", authID)
+			failed = append(failed, authID)
+			continue
+		}
+
+		// Also update the file on disk if it exists
+		if path := strings.TrimSpace(auth.Attributes["path"]); path != "" {
+			if err := h.updateAuthFileDenoProxy(path, denoHost); err != nil {
+				log.WithError(err).Warnf("failed to update auth file %s on disk", path)
+			}
+		}
+
+		updated = append(updated, authID)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":  "ok",
+		"updated": updated,
+		"failed":  failed,
+	})
+}
+
+// updateAuthFileDenoProxy updates the Deno proxy configuration in the auth file on disk.
+func (h *Handler) updateAuthFileDenoProxy(path, denoHost string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+
+	var content map[string]any
+	if err = json.Unmarshal(data, &content); err != nil {
+		return err
+	}
+
+	if denoHost == "" {
+		delete(content, "deno_proxy_host")
+		delete(content, "deno_proxy_server_type")
+	} else {
+		content["deno_proxy_host"] = denoHost
+		// Remove server_type as it's now auto-detected from request URL
+		delete(content, "deno_proxy_server_type")
+	}
+
+	newData, err := json.MarshalIndent(content, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(path, newData, 0o600)
+}
+
+// DeleteDenoProxyConfig removes Deno proxy configuration from one or more auth files.
+func (h *Handler) DeleteDenoProxyConfig(c *gin.Context) {
+	if h.authManager == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "auth manager unavailable"})
+		return
+	}
+
+	var req struct {
+		IDs []string `json:"ids"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		// Try query parameter
+		if id := c.Query("id"); id != "" {
+			req.IDs = []string{id}
+		} else if name := c.Query("name"); name != "" {
+			req.IDs = []string{name}
+		}
+	}
+
+	if len(req.IDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ids is required"})
+		return
+	}
+
+	ctx := c.Request.Context()
+	deleted := make([]string, 0, len(req.IDs))
+	failed := make([]string, 0)
+
+	for _, authID := range req.IDs {
+		authID = strings.TrimSpace(authID)
+		if authID == "" {
+			continue
+		}
+
+		auth, ok := h.authManager.GetByID(authID)
+		if !ok {
+			auths := h.authManager.List()
+			for _, a := range auths {
+				if a.FileName == authID {
+					auth = a
+					ok = true
+					break
+				}
+			}
+		}
+		if !ok {
+			failed = append(failed, authID)
+			continue
+		}
+
+		if auth.Attributes != nil {
+			delete(auth.Attributes, "deno_proxy_host")
+			delete(auth.Attributes, "deno_proxy_server_type")
+		}
+		auth.UpdatedAt = time.Now()
+
+		if _, err := h.authManager.Update(ctx, auth); err != nil {
+			failed = append(failed, authID)
+			continue
+		}
+
+		if path := strings.TrimSpace(auth.Attributes["path"]); path != "" {
+			_ = h.updateAuthFileDenoProxy(path, "")
+		}
+
+		deleted = append(deleted, authID)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":  "ok",
+		"deleted": deleted,
+		"failed":  failed,
+	})
 }

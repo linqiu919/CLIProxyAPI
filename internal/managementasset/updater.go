@@ -64,7 +64,14 @@ func SetCurrentConfig(cfg *config.Config) {
 
 // StartAutoUpdater launches a background goroutine that periodically ensures the management asset is up to date.
 // It respects the disable-control-panel flag on every iteration and supports hot-reloaded configurations.
+// When embedded HTML is available, the auto-updater is skipped entirely.
 func StartAutoUpdater(ctx context.Context, configFilePath string) {
+	// Skip auto-updater when embedded HTML is available
+	if HasEmbeddedHTML() {
+		log.Debug("management asset auto-updater skipped: embedded HTML available")
+		return
+	}
+
 	configFilePath = strings.TrimSpace(configFilePath)
 	if configFilePath == "" {
 		log.Debug("management asset auto-updater skipped: empty config path")
@@ -183,7 +190,13 @@ func FilePath(configFilePath string) string {
 // EnsureLatestManagementHTML checks the latest management.html asset and updates the local copy when needed.
 // The function is designed to run in a background goroutine and will never panic.
 // It enforces a 3-hour rate limit to avoid frequent checks on config/auth file changes.
+// When embedded HTML is available, this function does nothing.
 func EnsureLatestManagementHTML(ctx context.Context, staticDir string, proxyURL string, panelRepository string) {
+	// Skip when embedded HTML is available
+	if HasEmbeddedHTML() {
+		return
+	}
+
 	if ctx == nil {
 		ctx = context.Background()
 	}

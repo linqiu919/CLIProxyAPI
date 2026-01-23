@@ -86,20 +86,29 @@ func (s *FileSynthesizer) Synthesize(ctx *SynthesisContext) ([]*coreauth.Auth, e
 			}
 		}
 
+		attrs := map[string]string{
+			"source": full,
+			"path":   full,
+		}
+		// Preserve Deno proxy configuration from the auth file
+		if denoHost, ok := metadata["deno_proxy_host"].(string); ok && denoHost != "" {
+			attrs["deno_proxy_host"] = denoHost
+		}
+		if denoServerType, ok := metadata["deno_proxy_server_type"].(string); ok && denoServerType != "" {
+			attrs["deno_proxy_server_type"] = denoServerType
+		}
+
 		a := &coreauth.Auth{
-			ID:       id,
-			Provider: provider,
-			Label:    label,
-			Prefix:   prefix,
-			Status:   coreauth.StatusActive,
-			Attributes: map[string]string{
-				"source": full,
-				"path":   full,
-			},
-			ProxyURL:  proxyURL,
-			Metadata:  metadata,
-			CreatedAt: now,
-			UpdatedAt: now,
+			ID:         id,
+			Provider:   provider,
+			Label:      label,
+			Prefix:     prefix,
+			Status:     coreauth.StatusActive,
+			Attributes: attrs,
+			ProxyURL:   proxyURL,
+			Metadata:   metadata,
+			CreatedAt:  now,
+			UpdatedAt:  now,
 		}
 		ApplyAuthExcludedModelsMeta(a, cfg, nil, "oauth")
 		if provider == "gemini-cli" {
