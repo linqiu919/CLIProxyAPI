@@ -1,11 +1,11 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Button } from '@/components/ui/Button';
-import { Input } from '@/components/ui/Input';
-import { IconEye, IconEyeOff } from '@/components/ui/icons';
+import { IconEye, IconEyeOff, IconAlertCircle } from '@/components/ui/icons';
 import { useAuthStore, useLanguageStore, useNotificationStore } from '@/stores';
 import { detectApiBaseFromLocation } from '@/utils/connection';
+import { INLINE_LOGO_JPEG } from '@/assets/logoInline';
+import styles from './Login/Login.module.scss';
 
 export function LoginPage() {
   const { t } = useTranslation();
@@ -87,77 +87,128 @@ export function LoginPage() {
   }
 
   return (
-    <div className="login-page">
-      <div className="login-card">
-        <div className="login-header">
-          <div className="login-title-row">
-            <div className="title">{t('title.login')}</div>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="login-language-btn"
-              onClick={toggleLanguage}
-              title={t('language.switch')}
-              aria-label={t('language.switch')}
-            >
-              {nextLanguageLabel}
-            </Button>
-          </div>
-          <div className="subtitle">{t('login.subtitle')}</div>
-        </div>
+    <div className={styles.container}>
+      <div className={styles.loginCard}>
+        {/* 顶部装饰条 */}
+        <div className={styles.cardHeader} />
 
-        <Input
-          autoFocus
-          label={t('login.management_key_label')}
-          placeholder={t('login.management_key_placeholder')}
-          type={showKey ? 'text' : 'password'}
-          value={managementKey}
-          onChange={(e) => setManagementKey(e.target.value)}
-          onKeyDown={handleSubmitKeyDown}
-          rightElement={
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              onClick={() => setShowKey((prev) => !prev)}
-              aria-label={
-                showKey
-                  ? t('login.hide_key', { defaultValue: '隐藏密钥' })
-                  : t('login.show_key', { defaultValue: '显示密钥' })
-              }
-              title={
-                showKey
-                  ? t('login.hide_key', { defaultValue: '隐藏密钥' })
-                  : t('login.show_key', { defaultValue: '显示密钥' })
-              }
-            >
-              {showKey ? <IconEyeOff size={16} /> : <IconEye size={16} />}
+        <div className={styles.cardBody}>
+          {/* 头部区域 */}
+          <div className={styles.header}>
+            {/* Logo */}
+            <div className={styles.logoWrapper}>
+              <img src={INLINE_LOGO_JPEG} alt="Logo" className={styles.logo} />
+            </div>
+
+            {/* 标题和语言切换 */}
+            <div className={styles.titleRow}>
+              <h1 className={styles.title}>{t('title.login')}</h1>
+              <button
+                type="button"
+                className={styles.langBtn}
+                onClick={toggleLanguage}
+                title={t('language.switch')}
+                aria-label={t('language.switch')}
+              >
+                {nextLanguageLabel}
+              </button>
+            </div>
+
+            <p className={styles.subtitle}>{t('login.subtitle')}</p>
+          </div>
+
+          {/* 表单 */}
+          <form
+            className={styles.form}
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleSubmit();
+            }}
+          >
+            {/* Management Key 输入 */}
+            <div className={styles.inputGroup}>
+              <label htmlFor="management-key" className={styles.inputLabel}>
+                {t('login.management_key_label')}
+              </label>
+              <div className={styles.inputWrapper}>
+                <input
+                  id="management-key"
+                  type={showKey ? 'text' : 'password'}
+                  className={styles.input}
+                  placeholder={t('login.management_key_placeholder')}
+                  value={managementKey}
+                  onChange={(e) => setManagementKey(e.target.value)}
+                  onKeyDown={handleSubmitKeyDown}
+                  autoFocus
+                  autoComplete="current-password"
+                />
+                <button
+                  type="button"
+                  className={styles.toggleBtn}
+                  onClick={() => setShowKey((prev) => !prev)}
+                  aria-label={
+                    showKey
+                      ? t('login.hide_key', { defaultValue: '隐藏密钥' })
+                      : t('login.show_key', { defaultValue: '显示密钥' })
+                  }
+                  title={
+                    showKey
+                      ? t('login.hide_key', { defaultValue: '隐藏密钥' })
+                      : t('login.show_key', { defaultValue: '显示密钥' })
+                  }
+                >
+                  {showKey ? <IconEyeOff size={18} /> : <IconEye size={18} />}
+                </button>
+              </div>
+            </div>
+
+            {/* 记住密码 */}
+            <div className={styles.optionsRow}>
+              <label htmlFor="remember-password" className={styles.checkboxLabel}>
+                <input
+                  id="remember-password"
+                  type="checkbox"
+                  className={styles.checkbox}
+                  checked={rememberPassword}
+                  onChange={(e) => setRememberPassword(e.target.checked)}
+                />
+                <span>{t('login.remember_password_label')}</span>
+              </label>
+            </div>
+
+            {/* 登录按钮 */}
+            <button type="submit" className={styles.submitBtn} disabled={loading}>
+              <span className={styles.btnContent}>
+                {loading && <span className={styles.spinner} />}
+                <span>{loading ? t('login.submitting') : t('login.submit_button')}</span>
+              </span>
             </button>
-          }
-        />
 
-        <div className="toggle-advanced">
-          <input
-            id="remember-password-toggle"
-            type="checkbox"
-            checked={rememberPassword}
-            onChange={(e) => setRememberPassword(e.target.checked)}
-          />
-          <label htmlFor="remember-password-toggle">{t('login.remember_password_label')}</label>
-        </div>
+            {/* 错误提示 */}
+            {error && (
+              <div className={styles.errorBox}>
+                <IconAlertCircle size={18} className={styles.errorIcon} />
+                <span>{error}</span>
+              </div>
+            )}
 
-        <Button fullWidth onClick={handleSubmit} loading={loading}>
-          {loading ? t('login.submitting') : t('login.submit_button')}
-        </Button>
+            {/* 自动登录提示 */}
+            {autoLoading && (
+              <div className={styles.autoLoginBox}>
+                <span className={styles.autoLoginSpinner} />
+                <div className={styles.autoLoginText}>
+                  <strong>{t('auto_login.title')}</strong>
+                  <span>{t('auto_login.message')}</span>
+                </div>
+              </div>
+            )}
+          </form>
 
-        {error && <div className="error-box">{error}</div>}
-
-        {autoLoading && (
-          <div className="connection-box">
-            <div className="label">{t('auto_login.title')}</div>
-            <div className="value">{t('auto_login.message')}</div>
+          {/* 底部版本信息 */}
+          <div className={styles.footer}>
+            <p className={styles.version}>CLI Proxy API Management</p>
           </div>
-        )}
+        </div>
       </div>
     </div>
   );

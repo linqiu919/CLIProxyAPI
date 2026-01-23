@@ -1,124 +1,467 @@
+@use '../../styles/variables.scss' as *;
+@use '../../styles/mixins.scss' as *;
+
+// ============================================
+// 登录页面 - 现代化 API 管理平台风格
+// ============================================
+
 .container {
   min-height: 100vh;
   display: flex;
-  flex-direction: column;
-  background: linear-gradient(135deg, var(--primary-color) 0%, #1d4ed8 100%);
-  padding: $spacing-md;
-}
-
-.header {
-  display: flex;
-  justify-content: flex-end;
-  padding: $spacing-md 0;
-}
-
-.controls {
-  display: flex;
-  gap: $spacing-sm;
-}
-
-.iconButton {
-  @include button-reset;
-  display: flex;
-  align-items: center;
-  gap: $spacing-xs;
-  padding: $spacing-sm $spacing-md;
-  background-color: rgba(255, 255, 255, 0.2);
-  color: white;
-  border-radius: $radius-md;
-  transition: background-color $transition-fast;
-
-  &:hover {
-    background-color: rgba(255, 255, 255, 0.3);
-  }
-
-  i {
-    font-size: 18px;
-  }
-
-  span {
-    font-size: 14px;
-    font-weight: 500;
-  }
-}
-
-.loginBox {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  max-width: 450px;
+  background: var(--bg-secondary);
+  padding: $spacing-lg;
+  position: relative;
+  overflow: hidden;
+
+  // 技术感背景图案
+  &::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image:
+      radial-gradient(circle at 25% 25%, rgba(59, 130, 246, 0.04) 0%, transparent 50%),
+      radial-gradient(circle at 75% 75%, rgba(59, 130, 246, 0.03) 0%, transparent 50%);
+    pointer-events: none;
+  }
+
+  // 网格背景
+  &::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(59, 130, 246, 0.02) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(59, 130, 246, 0.02) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+  }
+
+  @include mobile {
+    padding: $spacing-md;
+    align-items: flex-start;
+    padding-top: $spacing-2xl;
+  }
+}
+
+.loginCard {
   width: 100%;
-  margin: 0 auto;
+  max-width: 440px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: $radius-lg;
+  box-shadow:
+    var(--shadow-lg),
+    0 0 0 1px rgba(59, 130, 246, 0.05);
+  overflow: hidden;
+  position: relative;
+  z-index: 1;
+  animation: cardEnter 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  @keyframes cardEnter {
+    from {
+      opacity: 0;
+      transform: translateY(20px) scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  @include mobile {
+    max-width: 100%;
+  }
+}
+
+// 卡片顶部装饰条
+.cardHeader {
+  height: 4px;
+  background: linear-gradient(90deg, var(--primary-color) 0%, #60a5fa 50%, var(--primary-color) 100%);
+  background-size: 200% 100%;
+  animation: gradientFlow 3s ease infinite;
+
+  @keyframes gradientFlow {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+  }
+}
+
+.cardBody {
+  padding: $spacing-2xl;
+
+  @include mobile {
+    padding: $spacing-lg;
+  }
+}
+
+// 头部区域
+.header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  margin-bottom: $spacing-xl;
+}
+
+// Logo 容器
+.logoWrapper {
+  margin-bottom: $spacing-lg;
+  position: relative;
 }
 
 .logo {
-  width: 80px;
-  height: 80px;
-  background-color: white;
-  border-radius: $radius-full;
+  width: 72px;
+  height: 72px;
+  border-radius: $radius-lg;
+  object-fit: cover;
+  box-shadow: var(--shadow-lg);
+  transition: transform $transition-normal;
+
+  &:hover {
+    transform: scale(1.05);
+  }
+}
+
+// 标题区域
+.titleRow {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 40px;
-  color: var(--primary-color);
-  margin-bottom: $spacing-lg;
-  box-shadow: var(--shadow-lg);
+  gap: $spacing-sm;
+  flex-wrap: wrap;
+  margin-bottom: $spacing-sm;
 }
 
 .title {
-  font-size: 28px;
-  font-weight: 700;
-  color: white;
-  margin: 0 0 $spacing-sm 0;
-  text-align: center;
+  font-size: 24px;
+  font-weight: 800;
+  color: var(--text-primary);
+  margin: 0;
+  letter-spacing: -0.5px;
+
+  @include mobile {
+    font-size: 20px;
+  }
 }
 
 .subtitle {
   font-size: 14px;
-  color: rgba(255, 255, 255, 0.9);
-  margin: 0 0 $spacing-2xl 0;
-  text-align: center;
+  color: var(--text-secondary);
+  margin: 0;
+  line-height: 1.5;
 }
 
+// 语言切换按钮
+.langBtn {
+  @include button-reset;
+  display: inline-flex;
+  align-items: center;
+  gap: $spacing-xs;
+  padding: 6px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: $radius-full;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  transition: all $transition-fast;
+  white-space: nowrap;
+
+  &:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    border-color: var(--border-hover);
+  }
+}
+
+// 表单区域
 .form {
-  width: 100%;
-  background-color: var(--bg-primary);
-  padding: $spacing-2xl;
-  border-radius: $radius-lg;
-  box-shadow: var(--shadow-lg);
   display: flex;
   flex-direction: column;
   gap: $spacing-lg;
 }
 
-.detectedInfo {
+// 输入组
+.inputGroup {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-xs;
+}
+
+.inputLabel {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.inputWrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.input {
+  width: 100%;
+  padding: 12px 44px 12px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: $radius-md;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 15px;
+  transition: all $transition-fast;
+
+  &::placeholder {
+    color: var(--text-tertiary);
+  }
+
+  &:hover {
+    border-color: var(--border-hover);
+  }
+
+  &:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+  }
+}
+
+.toggleBtn {
+  @include button-reset;
+  position: absolute;
+  right: 8px;
+  padding: $spacing-sm;
+  color: var(--text-tertiary);
+  border-radius: $radius-sm;
+  transition: all $transition-fast;
+
+  &:hover {
+    color: var(--text-secondary);
+    background: var(--bg-secondary);
+  }
+
+  svg {
+    display: block;
+  }
+}
+
+// 选项行（记住密码）
+.optionsRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: $spacing-sm;
+}
+
+.checkboxLabel {
   display: flex;
   align-items: center;
   gap: $spacing-sm;
-  padding: $spacing-md;
-  background-color: rgba(59, 130, 246, 0.1);
-  border-radius: $radius-md;
-  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 14px;
   color: var(--text-secondary);
+  transition: color $transition-fast;
 
-  i {
-    color: var(--primary-color);
-  }
-
-  strong {
+  &:hover {
     color: var(--text-primary);
   }
 }
 
+.checkbox {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--border-color);
+  border-radius: $radius-sm;
+  background: var(--bg-primary);
+  cursor: pointer;
+  appearance: none;
+  transition: all $transition-fast;
+  position: relative;
+
+  &:hover {
+    border-color: var(--primary-color);
+  }
+
+  &:checked {
+    background: var(--primary-color);
+    border-color: var(--primary-color);
+
+    &::after {
+      content: '';
+      position: absolute;
+      left: 5px;
+      top: 2px;
+      width: 4px;
+      height: 8px;
+      border: solid white;
+      border-width: 0 2px 2px 0;
+      transform: rotate(45deg);
+    }
+  }
+
+  &:focus {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+  }
+}
+
+// 登录按钮
+.submitBtn {
+  @include button-reset;
+  width: 100%;
+  padding: 14px;
+  background: var(--primary-color);
+  color: white;
+  font-size: 15px;
+  font-weight: 600;
+  border-radius: $radius-md;
+  transition: all $transition-fast;
+  position: relative;
+  overflow: hidden;
+
+  &:hover:not(:disabled) {
+    background: var(--primary-hover);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+  }
+
+  &:active:not(:disabled) {
+    transform: translateY(0);
+  }
+
+  &:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+  }
+}
+
+.btnContent {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: $spacing-sm;
+}
+
+.spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+}
+
+// 错误提示
+.errorBox {
+  display: flex;
+  align-items: flex-start;
+  gap: $spacing-sm;
+  padding: $spacing-md;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: $radius-md;
+  color: $error-color;
+  font-size: 14px;
+  animation: shake 0.4s ease-in-out;
+
+  @keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-4px); }
+    75% { transform: translateX(4px); }
+  }
+}
+
+.errorIcon {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+// 自动登录提示
+.autoLoginBox {
+  display: flex;
+  align-items: center;
+  gap: $spacing-sm;
+  padding: $spacing-md;
+  background: rgba(59, 130, 246, 0.06);
+  border: 1px dashed rgba(59, 130, 246, 0.3);
+  border-radius: $radius-md;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.autoLoginSpinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(59, 130, 246, 0.2);
+  border-top-color: var(--primary-color);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.autoLoginText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+
+  strong {
+    color: var(--text-primary);
+    font-weight: 600;
+  }
+}
+
+// 底部版本信息
 .footer {
   margin-top: $spacing-xl;
+  padding-top: $spacing-lg;
+  border-top: 1px solid var(--border-color);
   text-align: center;
 }
 
 .version {
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.7);
+  color: var(--text-tertiary);
   margin: 0;
+  font-family: $font-mono;
+}
+
+// 分割线
+.divider {
+  display: flex;
+  align-items: center;
+  gap: $spacing-md;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+
+  &::before,
+  &::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border-color);
+  }
+}
+
+// API 标识
+.apiBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: $spacing-xs;
+  padding: 4px 10px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: $radius-full;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }

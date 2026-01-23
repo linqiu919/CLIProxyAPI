@@ -2,6 +2,73 @@
 
 ## [Unreleased]
 
+### Fixed - 修复400等客户端错误时不应循环重试其他认证文件的问题
+
+**原因：** 当远程API返回400 (Bad Request) 等客户端错误时，原有逻辑会继续尝试所有其他认证文件。这是不正确的行为，因为400错误表示客户端请求本身有问题（如请求格式错误），切换认证文件无法解决问题。
+
+**修改文件：**
+- `sdk/cliproxy/auth/conductor.go`
+
+**变更内容：**
+
+1. **新增辅助函数 `isNonRetryableClientError`：**
+   - 判断HTTP状态码是否为不应重试的客户端错误
+   - 可重试的4xx状态码：403 (Forbidden)、408 (Request Timeout)、429 (Too Many Requests)
+   - 不可重试的4xx状态码：400 (Bad Request)、401 (Unauthorized)、402 (Payment Required)、404 (Not Found) 等其他所有4xx错误
+
+2. **修改6个执行函数：**
+   - `executeMixedOnce` - 混合多provider执行
+   - `executeCountMixedOnce` - 混合多provider计数
+   - `executeStreamMixedOnce` - 混合多provider流式执行
+   - `executeWithProvider` - 单provider执行
+   - `executeCountWithProvider` - 单provider计数
+   - `executeStreamWithProvider` - 单provider流式执行
+
+3. **行为变更：**
+   - 遇到400等不可重试的客户端错误时，立即返回错误，不再尝试其他认证文件
+   - 遇到403/408/429等可重试错误时，继续尝试其他认证文件（保持原有行为）
+
+---
+
+### Changed - 登录页面样式现代化重构
+
+**原因：** 优化登录页面样式，采用现代化设计风格，提升 API 管理平台的专业形象。
+
+**修改文件：**
+- `web/src/pages/Login/Login.module.scss` - 完全重写登录页面样式
+- `web/src/pages/LoginPage.tsx` - 使用新的模块化样式
+- `web/src/components/ui/icons.tsx` - 添加 `IconAlertCircle` 图标
+
+**主要改进：**
+
+1. **视觉设计：**
+   - 采用简洁的卡片式布局，带顶部渐变装饰条
+   - 添加技术感背景（网格图案和径向渐变）
+   - 使用项目 Logo 替代图标占位符
+   - 优化阴影和圆角效果
+
+2. **响应式设计：**
+   - 桌面端居中显示登录卡片
+   - 移动端自适应布局，调整间距和字号
+   - 使用 SCSS mixins 统一断点处理
+
+3. **交互体验：**
+   - 登录卡片入场动画（scale + fade）
+   - 按钮悬停效果（微上浮 + 阴影）
+   - 错误提示震动动画
+   - 自定义复选框样式
+
+4. **主题支持：**
+   - 完全使用 CSS 变量，支持深色/浅色主题切换
+   - 背景图案使用主题色透明度
+
+5. **代码结构：**
+   - 使用 CSS Modules 避免样式冲突
+   - 移除对通用组件（Button, Input）的依赖，使用原生元素
+   - 添加 `IconAlertCircle` 图标用于错误提示
+
+---
+
 ### Changed - 前端路由改造为多路由访问（/panel/ 前缀）
 
 **原因：** 将前端从单页面 Hash 路由模式改为服务端支持的多路由访问，支持直接访问子路由路径。由于 AMP 模块占用了 `/settings` 等根级路由，前端使用 `/panel/` 前缀避免冲突。

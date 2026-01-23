@@ -606,6 +606,10 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 				result.RetryAfter = ra
 			}
 			m.MarkResult(execCtx, result)
+			// Non-retryable client errors (e.g., 400 Bad Request) should not try other credentials
+			if isNonRetryableClientError(result.Error.HTTPStatus) {
+				return cliproxyexecutor.Response{}, errExec
+			}
 			lastErr = errExec
 			continue
 		}
@@ -655,6 +659,10 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 				result.RetryAfter = ra
 			}
 			m.MarkResult(execCtx, result)
+			// Non-retryable client errors (e.g., 400 Bad Request) should not try other credentials
+			if isNonRetryableClientError(result.Error.HTTPStatus) {
+				return cliproxyexecutor.Response{}, errExec
+			}
 			lastErr = errExec
 			continue
 		}
@@ -702,6 +710,10 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			result := Result{AuthID: auth.ID, Provider: provider, Model: routeModel, Success: false, Error: rerr}
 			result.RetryAfter = retryAfterFromError(errStream)
 			m.MarkResult(execCtx, result)
+			// Non-retryable client errors (e.g., 400 Bad Request) should not try other credentials
+			if isNonRetryableClientError(rerr.HTTPStatus) {
+				return nil, errStream
+			}
 			lastErr = errStream
 			continue
 		}
@@ -770,6 +782,10 @@ func (m *Manager) executeWithProvider(ctx context.Context, provider string, req 
 				result.RetryAfter = ra
 			}
 			m.MarkResult(execCtx, result)
+			// Non-retryable client errors (e.g., 400 Bad Request) should not try other credentials
+			if isNonRetryableClientError(result.Error.HTTPStatus) {
+				return cliproxyexecutor.Response{}, errExec
+			}
 			lastErr = errExec
 			continue
 		}
@@ -819,6 +835,10 @@ func (m *Manager) executeCountWithProvider(ctx context.Context, provider string,
 				result.RetryAfter = ra
 			}
 			m.MarkResult(execCtx, result)
+			// Non-retryable client errors (e.g., 400 Bad Request) should not try other credentials
+			if isNonRetryableClientError(result.Error.HTTPStatus) {
+				return cliproxyexecutor.Response{}, errExec
+			}
 			lastErr = errExec
 			continue
 		}
@@ -866,6 +886,10 @@ func (m *Manager) executeStreamWithProvider(ctx context.Context, provider string
 			result := Result{AuthID: auth.ID, Provider: provider, Model: routeModel, Success: false, Error: rerr}
 			result.RetryAfter = retryAfterFromError(errStream)
 			m.MarkResult(execCtx, result)
+			// Non-retryable client errors (e.g., 400 Bad Request) should not try other credentials
+			if isNonRetryableClientError(rerr.HTTPStatus) {
+				return nil, errStream
+			}
 			lastErr = errStream
 			continue
 		}
@@ -1553,6 +1577,37 @@ func statusCodeFromError(err error) int {
 		return sc.StatusCode()
 	}
 	return 0
+}
+
+// isNonRetryableClientError returns true if the HTTP status code indicates a client error
+// that should NOT trigger retrying with other credentials. These are typically errors
+// caused by the request itself (e.g., invalid request format, bad parameters) rather than
+// credential-specific issues.
+//
+// Retryable status codes (should try other credentials):
+//   - 403: Forbidden (credential may be blocked)
+//   - 408: Request Timeout
+//   - 429: Too Many Requests (rate limit/quota)
+//
+// Non-retryable client errors (should stop immediately):
+//   - 400: Bad Request
+//   - 401: Unauthorized (all credentials use same auth mechanism, won't help)
+//   - 402: Payment Required
+//   - 404: Not Found (model doesn't exist)
+//   - Other 4xx errors
+func isNonRetryableClientError(statusCode int) bool {
+	if statusCode < 400 || statusCode >= 500 {
+		return false // Not a client error
+	}
+	// These 4xx codes should allow retrying with other credentials
+	switch statusCode {
+	case http.StatusForbidden, // 403
+		http.StatusRequestTimeout,  // 408
+		http.StatusTooManyRequests: // 429
+		return false
+	}
+	// All other 4xx errors should not retry
+	return true
 }
 
 func retryAfterFromError(err error) *time.Duration {
