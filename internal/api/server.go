@@ -205,8 +205,6 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	// Add middleware
 	engine.Use(logging.GinLogrusLogger())
 	engine.Use(logging.GinLogrusRecovery())
-	// Enable gzip compression for responses (especially for large JS/CSS assets)
-	engine.Use(gzip.Gzip(gzip.DefaultCompression))
 	for _, mw := range optionState.extraMiddleware {
 		engine.Use(mw)
 	}
@@ -312,9 +310,32 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 // setupRoutes configures the API routes for the server.
 // It defines the endpoints and associates them with their respective handlers.
 func (s *Server) setupRoutes() {
-	s.engine.GET("/management.html", s.serveManagementControlPanel)
-	// Serve embedded static assets (JS, CSS, etc.)
-	s.engine.GET("/assets/*filepath", s.serveManagementAssets)
+	// Static assets with gzip compression (only for management panel assets)
+	gzipHandler := gzip.Gzip(gzip.DefaultCompression)
+
+	// Serve embedded static assets (JS, CSS, etc.) under /panel/assets/
+	s.engine.GET("/panel/assets/*filepath", gzipHandler, s.serveManagementAssets)
+
+	// Frontend SPA routes under /panel/ prefix - all return the same index.html for client-side routing
+	frontendRoutes := []string{
+		"/panel",
+		"/panel/",
+		"/panel/login",
+		"/panel/dashboard",
+		"/panel/settings",
+		"/panel/api-keys",
+		"/panel/ai-providers",
+		"/panel/auth-files",
+		"/panel/oauth",
+		"/panel/quota",
+		"/panel/usage",
+		"/panel/config",
+		"/panel/logs",
+		"/panel/system",
+	}
+	for _, route := range frontendRoutes {
+		s.engine.GET(route, gzipHandler, s.serveManagementControlPanel)
+	}
 	openaiHandlers := openai.NewOpenAIAPIHandler(s.handlers)
 	geminiHandlers := gemini.NewGeminiAPIHandler(s.handlers)
 	geminiCLIHandlers := gemini.NewGeminiCLIAPIHandler(s.handlers)
@@ -342,6 +363,8 @@ func (s *Server) setupRoutes() {
 		v1beta.GET("/models/*action", geminiHandlers.GeminiGetHandler)
 	}
 
+	s.engine.POST("/v1internal:method", geminiCLIHandlers.CLIHandler)
+
 	// Root endpoint
 	s.engine.GET("/", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -353,7 +376,6 @@ func (s *Server) setupRoutes() {
 			},
 		})
 	})
-	s.engine.POST("/v1internal:method", geminiCLIHandlers.CLIHandler)
 
 	// OAuth callback endpoints (reuse main server port)
 	// These endpoints receive provider redirects and persist

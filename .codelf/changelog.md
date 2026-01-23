@@ -2,6 +2,50 @@
 
 ## [Unreleased]
 
+### Changed - 前端路由改造为多路由访问（/panel/ 前缀）
+
+**原因：** 将前端从单页面 Hash 路由模式改为服务端支持的多路由访问，支持直接访问子路由路径。由于 AMP 模块占用了 `/settings` 等根级路由，前端使用 `/panel/` 前缀避免冲突。
+
+**修改文件：**
+- `internal/api/server.go` - 添加 `/panel/` 前缀的前端路由支持
+- `web/src/App.tsx` - 将 `HashRouter` 改为 `BrowserRouter`，动态设置 `basename`
+- `web/vite.config.ts` - 根据 mode 动态设置 `base`（开发 `/`，生产 `/panel/`）
+- `config.example.yaml` - 移除 `panel-github-repository` 配置项（前端已嵌入）
+
+**变更内容：**
+
+1. **后端路由支持：**
+   - 移除 `/management.html` 路由
+   - 新增 `/panel/` 前缀的前端路由映射：
+     - `/panel`, `/panel/`, `/panel/login`, `/panel/dashboard`, `/panel/settings`
+     - `/panel/api-keys`, `/panel/ai-providers`, `/panel/auth-files`, `/panel/oauth`
+     - `/panel/quota`, `/panel/usage`, `/panel/config`, `/panel/logs`, `/panel/system`
+   - 静态资源路由：`/panel/assets/*filepath`
+   - 保留 `/` 路径的 JSON 响应
+
+2. **前端路由模式：**
+   - 从 `HashRouter`（URL 格式：`/management.html#/dashboard`）
+   - 改为 `BrowserRouter`（URL 格式：`/panel/dashboard`）
+   - 开发模式：`basename='/'`，生产模式：`basename='/panel'`
+
+3. **Vite 配置动态化：**
+   - 开发模式：`base: '/'`（直接访问 Vite 开发服务器）
+   - 生产模式：`base: '/panel/'`（嵌入后端的静态资源）
+
+4. **访问入口变更：**
+   - 旧入口：`/management.html`
+   - 新入口：`/panel/` 或 `/panel/login`
+
+5. **gzip 压缩范围：**
+   - 仅应用于前端静态资源（`/panel/*` 路由和 `/panel/assets/*`）
+   - 不影响后端 API 路由（`/v0/*`, `/v1/*`, `/v1beta/*` 等）
+
+6. **配置精简：**
+   - 从 `config.example.yaml` 移除 `panel-github-repository` 配置项
+   - 前端已嵌入二进制，不再需要从 GitHub 下载
+
+---
+
 ### Fixed - 前端资源加载性能优化
 
 **原因：** 前端 JS 文件约 1.4MB，未压缩传输导致页面加载需要 30+ 秒。

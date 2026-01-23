@@ -35,7 +35,9 @@ function getVersion(): string {
 }
 
 // https://vitejs.dev/config/
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
+  // Development: use root path; Production: use /panel/ prefix
+  base: mode === 'development' ? '/' : '/panel/',
   plugins: [
     react()
   ],
@@ -77,4 +79,4 @@ export default defineConfig({
     assetsDir: 'assets',
     sourcemap: false
   }
-});
+}));

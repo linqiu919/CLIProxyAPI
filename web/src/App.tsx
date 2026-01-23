@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { HashRouter, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Route, Routes } from 'react-router-dom';
 import { LoginPage } from '@/pages/LoginPage';
 import { NotificationContainer } from '@/components/common/NotificationContainer';
 import { ConfirmationModal } from '@/components/common/ConfirmationModal';
@@ -10,6 +10,9 @@ import { useAuthStore, useLanguageStore, useThemeStore } from '@/stores';
 
 const SPLASH_DURATION = 1500;
 const SPLASH_FADE_DURATION = 400;
+
+// Use /panel prefix in production, root path in development
+const ROUTER_BASENAME = import.meta.env.MODE === 'development' ? '/' : '/panel';
 
 function App() {
   const initializeTheme = useThemeStore((state) => state.initializeTheme);
@@ -60,7 +63,7 @@ function App() {
   }
 
   return (
-    <HashRouter>
+    <BrowserRouter basename={ROUTER_BASENAME}>
       <NotificationContainer />
       <ConfirmationModal />
       <Routes>
@@ -74,7 +77,7 @@ function App() {
           }
         />
       </Routes>
-    </HashRouter>
+    </BrowserRouter>
   );
 }
 
