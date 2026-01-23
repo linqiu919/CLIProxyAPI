@@ -614,6 +614,7 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PUT("/auth-files/deno-proxy", s.mgmt.SetDenoProxyConfig)
 		mgmt.POST("/auth-files/deno-proxy", s.mgmt.SetDenoProxyConfig)
 		mgmt.DELETE("/auth-files/deno-proxy", s.mgmt.DeleteDenoProxyConfig)
+		mgmt.PATCH("/auth-files/status", s.mgmt.PatchAuthFileStatus)
 		mgmt.POST("/vertex/import", s.mgmt.ImportVertexCredential)
 
 		mgmt.GET("/anthropic-auth-url", s.mgmt.RequestAnthropicToken)
