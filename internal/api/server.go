@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/access"
 	managementHandlers "github.com/router-for-me/CLIProxyAPI/v6/internal/api/handlers/management"
@@ -204,6 +205,8 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	// Add middleware
 	engine.Use(logging.GinLogrusLogger())
 	engine.Use(logging.GinLogrusRecovery())
+	// Enable gzip compression for responses (especially for large JS/CSS assets)
+	engine.Use(gzip.Gzip(gzip.DefaultCompression))
 	for _, mw := range optionState.extraMiddleware {
 		engine.Use(mw)
 	}
@@ -722,6 +725,8 @@ func (s *Server) serveManagementAssets(c *gin.Context) {
 			contentType = "font/woff2"
 		}
 
+		// Set cache headers for static assets (1 year for hashed filenames)
+		c.Header("Cache-Control", "public, max-age=31536000, immutable")
 		c.Data(http.StatusOK, contentType, data)
 		return
 	}

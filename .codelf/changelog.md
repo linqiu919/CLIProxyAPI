@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+### Fixed - 前端资源加载性能优化
+
+**原因：** 前端 JS 文件约 1.4MB，未压缩传输导致页面加载需要 30+ 秒。
+
+**修改文件：**
+- `internal/api/server.go` - 添加 gzip 中间件和缓存头
+- `go.mod` / `go.sum` - 添加 `github.com/gin-contrib/gzip` 依赖
+- `web/src/components/ui/Modal.tsx` - 修复 TypeScript 类型错误
+
+**变更内容：**
+
+1. **gzip 压缩：**
+   - 使用 `gin-contrib/gzip` 中间件自动压缩响应
+   - JS 文件从 1.4MB 压缩到约 500KB
+
+2. **缓存头优化：**
+   - 为静态资源（`/assets/*`）添加 `Cache-Control: public, max-age=31536000, immutable`
+   - 利用 Vite 的哈希文件名实现长期缓存
+
+---
+
 ### Changed - 前端资源嵌入方式改造
 
 **原因：** 解决 single-file 方式构建时页面加载 pending 的问题，改用更灵活的 embed.FS 嵌入整个 dist 目录。
