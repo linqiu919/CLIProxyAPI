@@ -142,102 +142,115 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 		return resp, err
 	}
 
-	translated = applyPayloadConfigWithRoot(e.cfg, baseModel, "antigravity", "request", translated, originalTranslated)
+	requestedModel := payloadRequestedModel(opts, req.Model)
+	translated = applyPayloadConfigWithRoot(e.cfg, baseModel, "antigravity", "request", translated, originalTranslated, requestedModel)
 
 	baseURLs := antigravityBaseURLFallbackOrder(auth)
 	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
 
-	var lastStatus int
-	var lastBody []byte
-	var lastErr error
+	attempts := antigravityRetryAttempts(e.cfg)
 
-	for idx, baseURL := range baseURLs {
-		actualURL := applyDenoProxy(auth, baseURL)
-		usingDenoProxy := actualURL != baseURL // Check if Deno proxy is being used
-		httpReq, errReq := e.buildRequest(ctx, auth, token, baseModel, translated, false, opts.Alt, actualURL)
-		if errReq != nil {
-			err = errReq
-			return resp, err
+attemptLoop:
+	for attempt := 0; attempt < attempts; attempt++ {
+		var lastStatus int
+		var lastBody []byte
+		var lastErr error
+
+		for idx, baseURL := range baseURLs {
+			actualURL := applyDenoProxy(auth, baseURL)
+			httpReq, errReq := e.buildRequest(ctx, auth, token, baseModel, translated, false, opts.Alt, actualURL)
+			if errReq != nil {
+				err = errReq
+				return resp, err
+			}
+
+			httpResp, errDo := httpClient.Do(httpReq)
+			if errDo != nil {
+				recordAPIResponseError(ctx, e.cfg, errDo)
+				if errors.Is(errDo, context.Canceled) || errors.Is(errDo, context.DeadlineExceeded) {
+					return resp, errDo
+				}
+				lastStatus = 0
+				lastBody = nil
+				lastErr = errDo
+				if idx+1 < len(baseURLs) {
+					log.Debugf("antigravity executor: request error on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
+					continue
+				}
+				err = errDo
+				return resp, err
+			}
+
+			recordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
+			bodyBytes, errRead := io.ReadAll(httpResp.Body)
+			if errClose := httpResp.Body.Close(); errClose != nil {
+				log.Errorf("antigravity executor: close response body error: %v", errClose)
+			}
+			if errRead != nil {
+				recordAPIResponseError(ctx, e.cfg, errRead)
+				err = errRead
+				return resp, err
+			}
+			appendAPIResponseChunk(ctx, e.cfg, bodyBytes)
+
+			if httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {
+				log.Debugf("antigravity executor: upstream error status: %d, body: %s", httpResp.StatusCode, summarizeErrorBody(httpResp.Header.Get("Content-Type"), bodyBytes))
+				lastStatus = httpResp.StatusCode
+				lastBody = append([]byte(nil), bodyBytes...)
+				lastErr = nil
+				if httpResp.StatusCode == http.StatusTooManyRequests && idx+1 < len(baseURLs) {
+					log.Debugf("antigravity executor: rate limited on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
+					continue
+				}
+				if antigravityShouldRetryNoCapacity(httpResp.StatusCode, bodyBytes) {
+					if idx+1 < len(baseURLs) {
+						log.Debugf("antigravity executor: no capacity on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
+						continue
+					}
+					if attempt+1 < attempts {
+						delay := antigravityNoCapacityRetryDelay(attempt)
+						log.Debugf("antigravity executor: no capacity for model %s, retrying in %s (attempt %d/%d)", baseModel, delay, attempt+1, attempts)
+						if errWait := antigravityWait(ctx, delay); errWait != nil {
+							return resp, errWait
+						}
+						continue attemptLoop
+					}
+				}
+				sErr := statusErr{code: httpResp.StatusCode, msg: string(bodyBytes)}
+				if httpResp.StatusCode == http.StatusTooManyRequests {
+					if retryAfter, parseErr := parseRetryDelay(bodyBytes); parseErr == nil && retryAfter != nil {
+						sErr.retryAfter = retryAfter
+					}
+				}
+				err = sErr
+				return resp, err
+			}
+
+			reporter.publish(ctx, parseAntigravityUsage(bodyBytes))
+			var param any
+			converted := sdktranslator.TranslateNonStream(ctx, to, from, req.Model, bytes.Clone(opts.OriginalRequest), translated, bodyBytes, &param)
+			resp = cliproxyexecutor.Response{Payload: []byte(converted)}
+			reporter.ensurePublished(ctx)
+			return resp, nil
 		}
 
-		httpResp, errDo := httpClient.Do(httpReq)
-		if errDo != nil {
-			recordAPIResponseError(ctx, e.cfg, errDo)
-			// Log Deno proxy forwarding failure
-			if usingDenoProxy {
-				log.Warnf("deno proxy: forwarding failed [auth=%s] %s -> %s, error: %v", auth.ID, baseURL, actualURL, errDo)
-			}
-			if errors.Is(errDo, context.Canceled) || errors.Is(errDo, context.DeadlineExceeded) {
-				return resp, errDo
-			}
-			lastStatus = 0
-			lastBody = nil
-			lastErr = errDo
-			if idx+1 < len(baseURLs) {
-				log.Debugf("antigravity executor: request error on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
-				continue
-			}
-			err = errDo
-			return resp, err
-		}
-		// Log Deno proxy forwarding success
-		if usingDenoProxy {
-			log.Infof("deno proxy: forwarding success [auth=%s] %s -> %s, status: %d", auth.ID, baseURL, actualURL, httpResp.StatusCode)
-		}
-
-		recordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
-		bodyBytes, errRead := io.ReadAll(httpResp.Body)
-		if errClose := httpResp.Body.Close(); errClose != nil {
-			log.Errorf("antigravity executor: close response body error: %v", errClose)
-		}
-		if errRead != nil {
-			recordAPIResponseError(ctx, e.cfg, errRead)
-			err = errRead
-			return resp, err
-		}
-		appendAPIResponseChunk(ctx, e.cfg, bodyBytes)
-
-		if httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {
-			log.Debugf("antigravity executor: upstream error status: %d, body: %s", httpResp.StatusCode, summarizeErrorBody(httpResp.Header.Get("Content-Type"), bodyBytes))
-			lastStatus = httpResp.StatusCode
-			lastBody = append([]byte(nil), bodyBytes...)
-			lastErr = nil
-			if httpResp.StatusCode == http.StatusTooManyRequests && idx+1 < len(baseURLs) {
-				log.Debugf("antigravity executor: rate limited on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
-				continue
-			}
-			sErr := statusErr{code: httpResp.StatusCode, msg: string(bodyBytes)}
-			if httpResp.StatusCode == http.StatusTooManyRequests {
-				if retryAfter, parseErr := parseRetryDelay(bodyBytes); parseErr == nil && retryAfter != nil {
+		switch {
+		case lastStatus != 0:
+			sErr := statusErr{code: lastStatus, msg: string(lastBody)}
+			if lastStatus == http.StatusTooManyRequests {
+				if retryAfter, parseErr := parseRetryDelay(lastBody); parseErr == nil && retryAfter != nil {
 					sErr.retryAfter = retryAfter
 				}
 			}
 			err = sErr
-			return resp, err
+		case lastErr != nil:
+			err = lastErr
+		default:
+			err = statusErr{code: http.StatusServiceUnavailable, msg: "antigravity executor: no base url available"}
 		}
-
-		reporter.publish(ctx, parseAntigravityUsage(bodyBytes))
-		var param any
-		converted := sdktranslator.TranslateNonStream(ctx, to, from, req.Model, bytes.Clone(opts.OriginalRequest), translated, bodyBytes, &param)
-		resp = cliproxyexecutor.Response{Payload: []byte(converted)}
-		reporter.ensurePublished(ctx)
-		return resp, nil
+		return resp, err
 	}
 
-	switch {
-	case lastStatus != 0:
-		sErr := statusErr{code: lastStatus, msg: string(lastBody)}
-		if lastStatus == http.StatusTooManyRequests {
-			if retryAfter, parseErr := parseRetryDelay(lastBody); parseErr == nil && retryAfter != nil {
-				sErr.retryAfter = retryAfter
-			}
-		}
-		err = sErr
-	case lastErr != nil:
-		err = lastErr
-	default:
-		err = statusErr{code: http.StatusServiceUnavailable, msg: "antigravity executor: no base url available"}
-	}
 	return resp, err
 }
 
@@ -271,165 +284,178 @@ func (e *AntigravityExecutor) executeClaudeNonStream(ctx context.Context, auth *
 		return resp, err
 	}
 
-	translated = applyPayloadConfigWithRoot(e.cfg, baseModel, "antigravity", "request", translated, originalTranslated)
+	requestedModel := payloadRequestedModel(opts, req.Model)
+	translated = applyPayloadConfigWithRoot(e.cfg, baseModel, "antigravity", "request", translated, originalTranslated, requestedModel)
 
 	baseURLs := antigravityBaseURLFallbackOrder(auth)
 	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
 
-	var lastStatus int
-	var lastBody []byte
-	var lastErr error
+	attempts := antigravityRetryAttempts(e.cfg)
 
-	for idx, baseURL := range baseURLs {
-		actualURL := applyDenoProxy(auth, baseURL)
-		usingDenoProxy := actualURL != baseURL // Check if Deno proxy is being used
-		httpReq, errReq := e.buildRequest(ctx, auth, token, baseModel, translated, true, opts.Alt, actualURL)
-		if errReq != nil {
-			err = errReq
-			return resp, err
-		}
+attemptLoop:
+	for attempt := 0; attempt < attempts; attempt++ {
+		var lastStatus int
+		var lastBody []byte
+		var lastErr error
 
-		httpResp, errDo := httpClient.Do(httpReq)
-		if errDo != nil {
-			recordAPIResponseError(ctx, e.cfg, errDo)
-			// Log Deno proxy forwarding failure
-			if usingDenoProxy {
-				log.Warnf("deno proxy: forwarding failed [auth=%s] %s -> %s, error: %v", auth.ID, baseURL, actualURL, errDo)
+		for idx, baseURL := range baseURLs {
+			actualURL := applyDenoProxy(auth, baseURL)
+			httpReq, errReq := e.buildRequest(ctx, auth, token, baseModel, translated, true, opts.Alt, actualURL)
+			if errReq != nil {
+				err = errReq
+				return resp, err
 			}
-			if errors.Is(errDo, context.Canceled) || errors.Is(errDo, context.DeadlineExceeded) {
-				return resp, errDo
-			}
-			lastStatus = 0
-			lastBody = nil
-			lastErr = errDo
-			if idx+1 < len(baseURLs) {
-				log.Debugf("antigravity executor: request error on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
-				continue
-			}
-			err = errDo
-			return resp, err
-		}
-		// Log Deno proxy forwarding success
-		if usingDenoProxy {
-			log.Infof("deno proxy: forwarding success [auth=%s] %s -> %s, status: %d", auth.ID, baseURL, actualURL, httpResp.StatusCode)
-		}
-		recordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
-		if httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {
-			bodyBytes, errRead := io.ReadAll(httpResp.Body)
-			if errClose := httpResp.Body.Close(); errClose != nil {
-				log.Errorf("antigravity executor: close response body error: %v", errClose)
-			}
-			if errRead != nil {
-				recordAPIResponseError(ctx, e.cfg, errRead)
-				if errors.Is(errRead, context.Canceled) || errors.Is(errRead, context.DeadlineExceeded) {
-					err = errRead
-					return resp, err
-				}
-				if errCtx := ctx.Err(); errCtx != nil {
-					err = errCtx
-					return resp, err
+
+			httpResp, errDo := httpClient.Do(httpReq)
+			if errDo != nil {
+				recordAPIResponseError(ctx, e.cfg, errDo)
+				if errors.Is(errDo, context.Canceled) || errors.Is(errDo, context.DeadlineExceeded) {
+					return resp, errDo
 				}
 				lastStatus = 0
 				lastBody = nil
-				lastErr = errRead
+				lastErr = errDo
 				if idx+1 < len(baseURLs) {
-					log.Debugf("antigravity executor: read error on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
+					log.Debugf("antigravity executor: request error on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
 					continue
 				}
-				err = errRead
+				err = errDo
 				return resp, err
 			}
-			appendAPIResponseChunk(ctx, e.cfg, bodyBytes)
-			lastStatus = httpResp.StatusCode
-			lastBody = append([]byte(nil), bodyBytes...)
-			lastErr = nil
-			if httpResp.StatusCode == http.StatusTooManyRequests && idx+1 < len(baseURLs) {
-				log.Debugf("antigravity executor: rate limited on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
-				continue
+			recordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
+			if httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {
+				bodyBytes, errRead := io.ReadAll(httpResp.Body)
+				if errClose := httpResp.Body.Close(); errClose != nil {
+					log.Errorf("antigravity executor: close response body error: %v", errClose)
+				}
+				if errRead != nil {
+					recordAPIResponseError(ctx, e.cfg, errRead)
+					if errors.Is(errRead, context.Canceled) || errors.Is(errRead, context.DeadlineExceeded) {
+						err = errRead
+						return resp, err
+					}
+					if errCtx := ctx.Err(); errCtx != nil {
+						err = errCtx
+						return resp, err
+					}
+					lastStatus = 0
+					lastBody = nil
+					lastErr = errRead
+					if idx+1 < len(baseURLs) {
+						log.Debugf("antigravity executor: read error on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
+						continue
+					}
+					err = errRead
+					return resp, err
+				}
+				appendAPIResponseChunk(ctx, e.cfg, bodyBytes)
+				lastStatus = httpResp.StatusCode
+				lastBody = append([]byte(nil), bodyBytes...)
+				lastErr = nil
+				if httpResp.StatusCode == http.StatusTooManyRequests && idx+1 < len(baseURLs) {
+					log.Debugf("antigravity executor: rate limited on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
+					continue
+				}
+				if antigravityShouldRetryNoCapacity(httpResp.StatusCode, bodyBytes) {
+					if idx+1 < len(baseURLs) {
+						log.Debugf("antigravity executor: no capacity on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
+						continue
+					}
+					if attempt+1 < attempts {
+						delay := antigravityNoCapacityRetryDelay(attempt)
+						log.Debugf("antigravity executor: no capacity for model %s, retrying in %s (attempt %d/%d)", baseModel, delay, attempt+1, attempts)
+						if errWait := antigravityWait(ctx, delay); errWait != nil {
+							return resp, errWait
+						}
+						continue attemptLoop
+					}
+				}
+				sErr := statusErr{code: httpResp.StatusCode, msg: string(bodyBytes)}
+				if httpResp.StatusCode == http.StatusTooManyRequests {
+					if retryAfter, parseErr := parseRetryDelay(bodyBytes); parseErr == nil && retryAfter != nil {
+						sErr.retryAfter = retryAfter
+					}
+				}
+				err = sErr
+				return resp, err
 			}
-			sErr := statusErr{code: httpResp.StatusCode, msg: string(bodyBytes)}
-			if httpResp.StatusCode == http.StatusTooManyRequests {
-				if retryAfter, parseErr := parseRetryDelay(bodyBytes); parseErr == nil && retryAfter != nil {
+
+			out := make(chan cliproxyexecutor.StreamChunk)
+			go func(resp *http.Response) {
+				defer close(out)
+				defer func() {
+					if errClose := resp.Body.Close(); errClose != nil {
+						log.Errorf("antigravity executor: close response body error: %v", errClose)
+					}
+				}()
+				scanner := bufio.NewScanner(resp.Body)
+				scanner.Buffer(nil, streamScannerBuffer)
+				for scanner.Scan() {
+					line := scanner.Bytes()
+					appendAPIResponseChunk(ctx, e.cfg, line)
+
+					// Filter usage metadata for all models
+					// Only retain usage statistics in the terminal chunk
+					line = FilterSSEUsageMetadata(line)
+
+					payload := jsonPayload(line)
+					if payload == nil {
+						continue
+					}
+
+					if detail, ok := parseAntigravityStreamUsage(payload); ok {
+						reporter.publish(ctx, detail)
+					}
+
+					out <- cliproxyexecutor.StreamChunk{Payload: payload}
+				}
+				if errScan := scanner.Err(); errScan != nil {
+					recordAPIResponseError(ctx, e.cfg, errScan)
+					reporter.publishFailure(ctx)
+					out <- cliproxyexecutor.StreamChunk{Err: errScan}
+				} else {
+					reporter.ensurePublished(ctx)
+				}
+			}(httpResp)
+
+			var buffer bytes.Buffer
+			for chunk := range out {
+				if chunk.Err != nil {
+					return resp, chunk.Err
+				}
+				if len(chunk.Payload) > 0 {
+					_, _ = buffer.Write(chunk.Payload)
+					_, _ = buffer.Write([]byte("\n"))
+				}
+			}
+			resp = cliproxyexecutor.Response{Payload: e.convertStreamToNonStream(buffer.Bytes())}
+
+			reporter.publish(ctx, parseAntigravityUsage(resp.Payload))
+			var param any
+			converted := sdktranslator.TranslateNonStream(ctx, to, from, req.Model, bytes.Clone(opts.OriginalRequest), translated, resp.Payload, &param)
+			resp = cliproxyexecutor.Response{Payload: []byte(converted)}
+			reporter.ensurePublished(ctx)
+
+			return resp, nil
+		}
+
+		switch {
+		case lastStatus != 0:
+			sErr := statusErr{code: lastStatus, msg: string(lastBody)}
+			if lastStatus == http.StatusTooManyRequests {
+				if retryAfter, parseErr := parseRetryDelay(lastBody); parseErr == nil && retryAfter != nil {
 					sErr.retryAfter = retryAfter
 				}
 			}
 			err = sErr
-			return resp, err
+		case lastErr != nil:
+			err = lastErr
+		default:
+			err = statusErr{code: http.StatusServiceUnavailable, msg: "antigravity executor: no base url available"}
 		}
-
-		out := make(chan cliproxyexecutor.StreamChunk)
-		go func(resp *http.Response) {
-			defer close(out)
-			defer func() {
-				if errClose := resp.Body.Close(); errClose != nil {
-					log.Errorf("antigravity executor: close response body error: %v", errClose)
-				}
-			}()
-			scanner := bufio.NewScanner(resp.Body)
-			scanner.Buffer(nil, streamScannerBuffer)
-			for scanner.Scan() {
-				line := scanner.Bytes()
-				appendAPIResponseChunk(ctx, e.cfg, line)
-
-				// Filter usage metadata for all models
-				// Only retain usage statistics in the terminal chunk
-				line = FilterSSEUsageMetadata(line)
-
-				payload := jsonPayload(line)
-				if payload == nil {
-					continue
-				}
-
-				if detail, ok := parseAntigravityStreamUsage(payload); ok {
-					reporter.publish(ctx, detail)
-				}
-
-				out <- cliproxyexecutor.StreamChunk{Payload: payload}
-			}
-			if errScan := scanner.Err(); errScan != nil {
-				recordAPIResponseError(ctx, e.cfg, errScan)
-				reporter.publishFailure(ctx)
-				out <- cliproxyexecutor.StreamChunk{Err: errScan}
-			} else {
-				reporter.ensurePublished(ctx)
-			}
-		}(httpResp)
-
-		var buffer bytes.Buffer
-		for chunk := range out {
-			if chunk.Err != nil {
-				return resp, chunk.Err
-			}
-			if len(chunk.Payload) > 0 {
-				_, _ = buffer.Write(chunk.Payload)
-				_, _ = buffer.Write([]byte("\n"))
-			}
-		}
-		resp = cliproxyexecutor.Response{Payload: e.convertStreamToNonStream(buffer.Bytes())}
-
-		reporter.publish(ctx, parseAntigravityUsage(resp.Payload))
-		var param any
-		converted := sdktranslator.TranslateNonStream(ctx, to, from, req.Model, bytes.Clone(opts.OriginalRequest), translated, resp.Payload, &param)
-		resp = cliproxyexecutor.Response{Payload: []byte(converted)}
-		reporter.ensurePublished(ctx)
-
-		return resp, nil
+		return resp, err
 	}
 
-	switch {
-	case lastStatus != 0:
-		sErr := statusErr{code: lastStatus, msg: string(lastBody)}
-		if lastStatus == http.StatusTooManyRequests {
-			if retryAfter, parseErr := parseRetryDelay(lastBody); parseErr == nil && retryAfter != nil {
-				sErr.retryAfter = retryAfter
-			}
-		}
-		err = sErr
-	case lastErr != nil:
-		err = lastErr
-	default:
-		err = statusErr{code: http.StatusServiceUnavailable, msg: "antigravity executor: no base url available"}
-	}
 	return resp, err
 }
 
@@ -647,154 +673,167 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 		return nil, err
 	}
 
-	translated = applyPayloadConfigWithRoot(e.cfg, baseModel, "antigravity", "request", translated, originalTranslated)
+	requestedModel := payloadRequestedModel(opts, req.Model)
+	translated = applyPayloadConfigWithRoot(e.cfg, baseModel, "antigravity", "request", translated, originalTranslated, requestedModel)
 
 	baseURLs := antigravityBaseURLFallbackOrder(auth)
 	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
 
-	var lastStatus int
-	var lastBody []byte
-	var lastErr error
+	attempts := antigravityRetryAttempts(e.cfg)
 
-	for idx, baseURL := range baseURLs {
-		actualURL := applyDenoProxy(auth, baseURL)
-		usingDenoProxy := actualURL != baseURL // Check if Deno proxy is being used
-		httpReq, errReq := e.buildRequest(ctx, auth, token, baseModel, translated, true, opts.Alt, actualURL)
-		if errReq != nil {
-			err = errReq
-			return nil, err
-		}
-		httpResp, errDo := httpClient.Do(httpReq)
-		if errDo != nil {
-			recordAPIResponseError(ctx, e.cfg, errDo)
-			// Log Deno proxy forwarding failure
-			if usingDenoProxy {
-				log.Warnf("deno proxy: forwarding failed [auth=%s] %s -> %s, error: %v", auth.ID, baseURL, actualURL, errDo)
+attemptLoop:
+	for attempt := 0; attempt < attempts; attempt++ {
+		var lastStatus int
+		var lastBody []byte
+		var lastErr error
+
+		for idx, baseURL := range baseURLs {
+			actualURL := applyDenoProxy(auth, baseURL)
+			httpReq, errReq := e.buildRequest(ctx, auth, token, baseModel, translated, true, opts.Alt, actualURL)
+			if errReq != nil {
+				err = errReq
+				return nil, err
 			}
-			if errors.Is(errDo, context.Canceled) || errors.Is(errDo, context.DeadlineExceeded) {
-				return nil, errDo
-			}
-			lastStatus = 0
-			lastBody = nil
-			lastErr = errDo
-			if idx+1 < len(baseURLs) {
-				log.Debugf("antigravity executor: request error on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
-				continue
-			}
-			err = errDo
-			return nil, err
-		}
-		// Log Deno proxy forwarding success
-		if usingDenoProxy {
-			log.Infof("deno proxy: forwarding success [auth=%s] %s -> %s, status: %d", auth.ID, baseURL, actualURL, httpResp.StatusCode)
-		}
-		recordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
-		if httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {
-			bodyBytes, errRead := io.ReadAll(httpResp.Body)
-			if errClose := httpResp.Body.Close(); errClose != nil {
-				log.Errorf("antigravity executor: close response body error: %v", errClose)
-			}
-			if errRead != nil {
-				recordAPIResponseError(ctx, e.cfg, errRead)
-				if errors.Is(errRead, context.Canceled) || errors.Is(errRead, context.DeadlineExceeded) {
-					err = errRead
-					return nil, err
-				}
-				if errCtx := ctx.Err(); errCtx != nil {
-					err = errCtx
-					return nil, err
+			httpResp, errDo := httpClient.Do(httpReq)
+			if errDo != nil {
+				recordAPIResponseError(ctx, e.cfg, errDo)
+				if errors.Is(errDo, context.Canceled) || errors.Is(errDo, context.DeadlineExceeded) {
+					return nil, errDo
 				}
 				lastStatus = 0
 				lastBody = nil
-				lastErr = errRead
+				lastErr = errDo
 				if idx+1 < len(baseURLs) {
-					log.Debugf("antigravity executor: read error on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
+					log.Debugf("antigravity executor: request error on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
 					continue
 				}
-				err = errRead
+				err = errDo
 				return nil, err
 			}
-			appendAPIResponseChunk(ctx, e.cfg, bodyBytes)
-			lastStatus = httpResp.StatusCode
-			lastBody = append([]byte(nil), bodyBytes...)
-			lastErr = nil
-			if httpResp.StatusCode == http.StatusTooManyRequests && idx+1 < len(baseURLs) {
-				log.Debugf("antigravity executor: rate limited on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
-				continue
+			recordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
+			if httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {
+				bodyBytes, errRead := io.ReadAll(httpResp.Body)
+				if errClose := httpResp.Body.Close(); errClose != nil {
+					log.Errorf("antigravity executor: close response body error: %v", errClose)
+				}
+				if errRead != nil {
+					recordAPIResponseError(ctx, e.cfg, errRead)
+					if errors.Is(errRead, context.Canceled) || errors.Is(errRead, context.DeadlineExceeded) {
+						err = errRead
+						return nil, err
+					}
+					if errCtx := ctx.Err(); errCtx != nil {
+						err = errCtx
+						return nil, err
+					}
+					lastStatus = 0
+					lastBody = nil
+					lastErr = errRead
+					if idx+1 < len(baseURLs) {
+						log.Debugf("antigravity executor: read error on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
+						continue
+					}
+					err = errRead
+					return nil, err
+				}
+				appendAPIResponseChunk(ctx, e.cfg, bodyBytes)
+				lastStatus = httpResp.StatusCode
+				lastBody = append([]byte(nil), bodyBytes...)
+				lastErr = nil
+				if httpResp.StatusCode == http.StatusTooManyRequests && idx+1 < len(baseURLs) {
+					log.Debugf("antigravity executor: rate limited on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
+					continue
+				}
+				if antigravityShouldRetryNoCapacity(httpResp.StatusCode, bodyBytes) {
+					if idx+1 < len(baseURLs) {
+						log.Debugf("antigravity executor: no capacity on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
+						continue
+					}
+					if attempt+1 < attempts {
+						delay := antigravityNoCapacityRetryDelay(attempt)
+						log.Debugf("antigravity executor: no capacity for model %s, retrying in %s (attempt %d/%d)", baseModel, delay, attempt+1, attempts)
+						if errWait := antigravityWait(ctx, delay); errWait != nil {
+							return nil, errWait
+						}
+						continue attemptLoop
+					}
+				}
+				sErr := statusErr{code: httpResp.StatusCode, msg: string(bodyBytes)}
+				if httpResp.StatusCode == http.StatusTooManyRequests {
+					if retryAfter, parseErr := parseRetryDelay(bodyBytes); parseErr == nil && retryAfter != nil {
+						sErr.retryAfter = retryAfter
+					}
+				}
+				err = sErr
+				return nil, err
 			}
-			sErr := statusErr{code: httpResp.StatusCode, msg: string(bodyBytes)}
-			if httpResp.StatusCode == http.StatusTooManyRequests {
-				if retryAfter, parseErr := parseRetryDelay(bodyBytes); parseErr == nil && retryAfter != nil {
+
+			out := make(chan cliproxyexecutor.StreamChunk)
+			stream = out
+			go func(resp *http.Response) {
+				defer close(out)
+				defer func() {
+					if errClose := resp.Body.Close(); errClose != nil {
+						log.Errorf("antigravity executor: close response body error: %v", errClose)
+					}
+				}()
+				scanner := bufio.NewScanner(resp.Body)
+				scanner.Buffer(nil, streamScannerBuffer)
+				var param any
+				for scanner.Scan() {
+					line := scanner.Bytes()
+					appendAPIResponseChunk(ctx, e.cfg, line)
+
+					// Filter usage metadata for all models
+					// Only retain usage statistics in the terminal chunk
+					line = FilterSSEUsageMetadata(line)
+
+					payload := jsonPayload(line)
+					if payload == nil {
+						continue
+					}
+
+					if detail, ok := parseAntigravityStreamUsage(payload); ok {
+						reporter.publish(ctx, detail)
+					}
+
+					chunks := sdktranslator.TranslateStream(ctx, to, from, req.Model, bytes.Clone(opts.OriginalRequest), translated, bytes.Clone(payload), &param)
+					for i := range chunks {
+						out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunks[i])}
+					}
+				}
+				tail := sdktranslator.TranslateStream(ctx, to, from, req.Model, bytes.Clone(opts.OriginalRequest), translated, []byte("[DONE]"), &param)
+				for i := range tail {
+					out <- cliproxyexecutor.StreamChunk{Payload: []byte(tail[i])}
+				}
+				if errScan := scanner.Err(); errScan != nil {
+					recordAPIResponseError(ctx, e.cfg, errScan)
+					reporter.publishFailure(ctx)
+					out <- cliproxyexecutor.StreamChunk{Err: errScan}
+				} else {
+					reporter.ensurePublished(ctx)
+				}
+			}(httpResp)
+			return stream, nil
+		}
+
+		switch {
+		case lastStatus != 0:
+			sErr := statusErr{code: lastStatus, msg: string(lastBody)}
+			if lastStatus == http.StatusTooManyRequests {
+				if retryAfter, parseErr := parseRetryDelay(lastBody); parseErr == nil && retryAfter != nil {
 					sErr.retryAfter = retryAfter
 				}
 			}
 			err = sErr
-			return nil, err
+		case lastErr != nil:
+			err = lastErr
+		default:
+			err = statusErr{code: http.StatusServiceUnavailable, msg: "antigravity executor: no base url available"}
 		}
-
-		out := make(chan cliproxyexecutor.StreamChunk)
-		stream = out
-		go func(resp *http.Response) {
-			defer close(out)
-			defer func() {
-				if errClose := resp.Body.Close(); errClose != nil {
-					log.Errorf("antigravity executor: close response body error: %v", errClose)
-				}
-			}()
-			scanner := bufio.NewScanner(resp.Body)
-			scanner.Buffer(nil, streamScannerBuffer)
-			var param any
-			for scanner.Scan() {
-				line := scanner.Bytes()
-				appendAPIResponseChunk(ctx, e.cfg, line)
-
-				// Filter usage metadata for all models
-				// Only retain usage statistics in the terminal chunk
-				line = FilterSSEUsageMetadata(line)
-
-				payload := jsonPayload(line)
-				if payload == nil {
-					continue
-				}
-
-				if detail, ok := parseAntigravityStreamUsage(payload); ok {
-					reporter.publish(ctx, detail)
-				}
-
-				chunks := sdktranslator.TranslateStream(ctx, to, from, req.Model, bytes.Clone(opts.OriginalRequest), translated, bytes.Clone(payload), &param)
-				for i := range chunks {
-					out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunks[i])}
-				}
-			}
-			tail := sdktranslator.TranslateStream(ctx, to, from, req.Model, bytes.Clone(opts.OriginalRequest), translated, []byte("[DONE]"), &param)
-			for i := range tail {
-				out <- cliproxyexecutor.StreamChunk{Payload: []byte(tail[i])}
-			}
-			if errScan := scanner.Err(); errScan != nil {
-				recordAPIResponseError(ctx, e.cfg, errScan)
-				reporter.publishFailure(ctx)
-				out <- cliproxyexecutor.StreamChunk{Err: errScan}
-			} else {
-				reporter.ensurePublished(ctx)
-			}
-		}(httpResp)
-		return stream, nil
+		return nil, err
 	}
 
-	switch {
-	case lastStatus != 0:
-		sErr := statusErr{code: lastStatus, msg: string(lastBody)}
-		if lastStatus == http.StatusTooManyRequests {
-			if retryAfter, parseErr := parseRetryDelay(lastBody); parseErr == nil && retryAfter != nil {
-				sErr.retryAfter = retryAfter
-			}
-		}
-		err = sErr
-	case lastErr != nil:
-		err = lastErr
-	default:
-		err = statusErr{code: http.StatusServiceUnavailable, msg: "antigravity executor: no base url available"}
-	}
 	return nil, err
 }
 
@@ -857,7 +896,6 @@ func (e *AntigravityExecutor) CountTokens(ctx context.Context, auth *cliproxyaut
 
 	for idx, baseURL := range baseURLs {
 		actualURL := applyDenoProxy(auth, baseURL)
-		usingDenoProxy := actualURL != baseURL // Check if Deno proxy is being used
 		base := strings.TrimSuffix(actualURL, "/")
 		if base == "" {
 			base = buildBaseURL(auth)
@@ -898,10 +936,6 @@ func (e *AntigravityExecutor) CountTokens(ctx context.Context, auth *cliproxyaut
 		httpResp, errDo := httpClient.Do(httpReq)
 		if errDo != nil {
 			recordAPIResponseError(ctx, e.cfg, errDo)
-			// Log Deno proxy forwarding failure
-			if usingDenoProxy {
-				log.Warnf("deno proxy: forwarding failed [auth=%s] %s -> %s, error: %v", auth.ID, baseURL, actualURL, errDo)
-			}
 			if errors.Is(errDo, context.Canceled) || errors.Is(errDo, context.DeadlineExceeded) {
 				return cliproxyexecutor.Response{}, errDo
 			}
@@ -913,10 +947,6 @@ func (e *AntigravityExecutor) CountTokens(ctx context.Context, auth *cliproxyaut
 				continue
 			}
 			return cliproxyexecutor.Response{}, errDo
-		}
-		// Log Deno proxy forwarding success
-		if usingDenoProxy {
-			log.Infof("deno proxy: forwarding success [auth=%s] %s -> %s, status: %d", auth.ID, baseURL, actualURL, httpResp.StatusCode)
 		}
 
 		recordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
@@ -984,7 +1014,6 @@ func FetchAntigravityModels(ctx context.Context, auth *cliproxyauth.Auth, cfg *c
 
 	for idx, baseURL := range baseURLs {
 		actualURL := applyDenoProxy(auth, baseURL)
-		usingDenoProxy := actualURL != baseURL // Check if Deno proxy is being used
 		modelsURL := actualURL + antigravityModelsPath
 		httpReq, errReq := http.NewRequestWithContext(ctx, http.MethodPost, modelsURL, bytes.NewReader([]byte(`{}`)))
 		if errReq != nil {
@@ -999,10 +1028,6 @@ func FetchAntigravityModels(ctx context.Context, auth *cliproxyauth.Auth, cfg *c
 
 		httpResp, errDo := httpClient.Do(httpReq)
 		if errDo != nil {
-			// Log Deno proxy forwarding failure
-			if usingDenoProxy {
-				log.Warnf("deno proxy: models request failed [auth=%s] %s -> %s, error: %v", auth.ID, baseURL, actualURL, errDo)
-			}
 			if errors.Is(errDo, context.Canceled) || errors.Is(errDo, context.DeadlineExceeded) {
 				return nil
 			}
@@ -1011,10 +1036,6 @@ func FetchAntigravityModels(ctx context.Context, auth *cliproxyauth.Auth, cfg *c
 				continue
 			}
 			return nil
-		}
-		// Log Deno proxy forwarding success
-		if usingDenoProxy {
-			log.Infof("deno proxy: models request success [auth=%s] %s -> %s, status: %d", auth.ID, baseURL, actualURL, httpResp.StatusCode)
 		}
 
 		bodyBytes, errRead := io.ReadAll(httpResp.Body)
@@ -1044,7 +1065,7 @@ func FetchAntigravityModels(ctx context.Context, auth *cliproxyauth.Auth, cfg *c
 		now := time.Now().Unix()
 		modelConfig := registry.GetAntigravityModelConfig()
 		models := make([]*registry.ModelInfo, 0, len(result.Map()))
-		for originalName := range result.Map() {
+		for originalName, modelData := range result.Map() {
 			modelID := strings.TrimSpace(originalName)
 			if modelID == "" {
 				continue
@@ -1054,12 +1075,18 @@ func FetchAntigravityModels(ctx context.Context, auth *cliproxyauth.Auth, cfg *c
 				continue
 			}
 			modelCfg := modelConfig[modelID]
-			modelName := modelID
+
+			// Extract displayName from upstream response, fallback to modelID
+			displayName := modelData.Get("displayName").String()
+			if displayName == "" {
+				displayName = modelID
+			}
+
 			modelInfo := &registry.ModelInfo{
 				ID:          modelID,
-				Name:        modelName,
-				Description: modelID,
-				DisplayName: modelID,
+				Name:        modelID,
+				Description: displayName,
+				DisplayName: displayName,
 				Version:     modelID,
 				Object:      "model",
 				Created:     now,
@@ -1425,186 +1452,65 @@ func resolveUserAgent(auth *cliproxyauth.Auth) string {
 	return defaultAntigravityAgent
 }
 
+func antigravityRetryAttempts(cfg *config.Config) int {
+	if cfg == nil {
+		return 1
+	}
+	retry := cfg.RequestRetry
+	if retry < 0 {
+		retry = 0
+	}
+	attempts := retry + 1
+	if attempts < 1 {
+		return 1
+	}
+	return attempts
+}
+
+func antigravityShouldRetryNoCapacity(statusCode int, body []byte) bool {
+	if statusCode != http.StatusServiceUnavailable {
+		return false
+	}
+	if len(body) == 0 {
+		return false
+	}
+	msg := strings.ToLower(string(body))
+	return strings.Contains(msg, "no capacity available")
+}
+
+func antigravityNoCapacityRetryDelay(attempt int) time.Duration {
+	if attempt < 0 {
+		attempt = 0
+	}
+	delay := time.Duration(attempt+1) * 250 * time.Millisecond
+	if delay > 2*time.Second {
+		delay = 2 * time.Second
+	}
+	return delay
+}
+
+func antigravityWait(ctx context.Context, wait time.Duration) error {
+	if wait <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 func antigravityBaseURLFallbackOrder(auth *cliproxyauth.Auth) []string {
-	// Priority 1: Custom base_url from auth attributes/metadata
 	if base := resolveCustomAntigravityBaseURL(auth); base != "" {
 		return []string{base}
 	}
-	// Priority 2: Default fallback order (Deno proxy is applied dynamically per-request)
 	return []string{
-		antigravitySandboxBaseURLDaily,
 		antigravityBaseURLDaily,
-		antigravityBaseURLProd,
-	}
-}
-
-// getDenoProxyHost extracts Deno proxy host from auth configuration.
-func getDenoProxyHost(auth *cliproxyauth.Auth) string {
-	if auth == nil {
-		return ""
-	}
-
-	var denoHost string
-
-	// Check Attributes first (immutable config)
-	if auth.Attributes != nil {
-		denoHost = strings.TrimSpace(auth.Attributes["deno_proxy_host"])
-		if denoHost == "" {
-			denoHost = strings.TrimSpace(auth.Attributes["deno_host"])
-		}
-	}
-
-	// Check Metadata if not found in Attributes
-	if denoHost == "" && auth.Metadata != nil {
-		if v, ok := auth.Metadata["deno_proxy_host"].(string); ok {
-			denoHost = strings.TrimSpace(v)
-		}
-		if denoHost == "" {
-			if v, ok := auth.Metadata["deno_host"].(string); ok {
-				denoHost = strings.TrimSpace(v)
-			}
-		}
-	}
-
-	return denoHost
-}
-
-// applyDenoProxy converts a target URL to use Deno proxy if configured.
-// It dynamically selects the Deno path based on the target URL:
-//   - sandbox.googleapis.com -> /antigravity-sandbox
-//   - daily-cloudcode-pa.googleapis.com -> /antigravity-daily
-//   - cloudcode-pa.googleapis.com -> /antigravity-cloudcode
-func applyDenoProxy(auth *cliproxyauth.Auth, targetURL string) string {
-	denoHost := getDenoProxyHost(auth)
-	if denoHost == "" {
-		return targetURL
-	}
-
-	// Normalize denoHost to have https:// prefix
-	if !strings.HasPrefix(denoHost, "http://") && !strings.HasPrefix(denoHost, "https://") {
-		denoHost = "https://" + denoHost
-	}
-	denoHost = strings.TrimSuffix(denoHost, "/")
-
-	// Detect server type from target URL
-	serverType := detectServerTypeFromTargetURL(targetURL)
-	path := mapServerTypeToPath(serverType)
-
-	proxyURL := denoHost + path
-
-	// Log the Deno proxy forwarding
-	authID := ""
-	if auth != nil {
-		authID = auth.ID
-	}
-	log.Infof("deno proxy: forwarding request [auth=%s] from %s -> %s (server_type=%s)", authID, targetURL, proxyURL, serverType)
-
-	return proxyURL
-}
-
-// detectServerTypeFromTargetURL determines the server type based on the target URL.
-func detectServerTypeFromTargetURL(targetURL string) string {
-	urlLower := strings.ToLower(targetURL)
-	if strings.Contains(urlLower, "sandbox") {
-		return "sandbox"
-	}
-	if strings.Contains(urlLower, "daily-cloudcode-pa.googleapis.com") {
-		return "daily"
-	}
-	// Default to production (cloudcode)
-	return "cloudcode"
-}
-
-// resolveDenoProxyURL extracts Deno proxy URL from auth configuration.
-// Deprecated: Use applyDenoProxy for dynamic URL conversion instead.
-func resolveDenoProxyURL(auth *cliproxyauth.Auth) string {
-	if auth == nil {
-		return ""
-	}
-
-	var denoHost, serverType string
-
-	// Check Attributes first (immutable config)
-	if auth.Attributes != nil {
-		denoHost = strings.TrimSpace(auth.Attributes["deno_proxy_host"])
-		if denoHost == "" {
-			denoHost = strings.TrimSpace(auth.Attributes["deno_host"])
-		}
-		serverType = strings.TrimSpace(auth.Attributes["deno_proxy_server_type"])
-		if serverType == "" {
-			serverType = strings.TrimSpace(auth.Attributes["deno_server_type"])
-		}
-	}
-
-	// Check Metadata if not found in Attributes
-	if auth.Metadata != nil {
-		if denoHost == "" {
-			if v, ok := auth.Metadata["deno_proxy_host"].(string); ok {
-				denoHost = strings.TrimSpace(v)
-			}
-			if denoHost == "" {
-				if v, ok := auth.Metadata["deno_host"].(string); ok {
-					denoHost = strings.TrimSpace(v)
-				}
-			}
-		}
-		if serverType == "" {
-			if v, ok := auth.Metadata["deno_proxy_server_type"].(string); ok {
-				serverType = strings.TrimSpace(v)
-			}
-			if serverType == "" {
-				if v, ok := auth.Metadata["deno_server_type"].(string); ok {
-					serverType = strings.TrimSpace(v)
-				}
-			}
-		}
-	}
-
-	if denoHost == "" {
-		return ""
-	}
-
-	// Normalize host: ensure https:// prefix
-	if !strings.HasPrefix(denoHost, "http://") && !strings.HasPrefix(denoHost, "https://") {
-		denoHost = "https://" + denoHost
-	}
-	denoHost = strings.TrimSuffix(denoHost, "/")
-
-	// Auto-detect server type from host if not specified
-	if serverType == "" {
-		serverType = detectServerTypeFromHost(denoHost)
-	}
-
-	// Map server type to path
-	path := mapServerTypeToPath(serverType)
-
-	return denoHost + path
-}
-
-// detectServerTypeFromHost attempts to infer server type from the Deno host URL.
-func detectServerTypeFromHost(host string) string {
-	hostLower := strings.ToLower(host)
-	if strings.Contains(hostLower, "sandbox") {
-		return "sandbox"
-	}
-	if strings.Contains(hostLower, "daily") {
-		return "daily"
-	}
-	// Default to production (cloudcode)
-	return "cloudcode"
-}
-
-// mapServerTypeToPath converts server type to the corresponding Deno proxy path.
-func mapServerTypeToPath(serverType string) string {
-	switch strings.ToLower(strings.TrimSpace(serverType)) {
-	case "sandbox":
-		return "/antigravity-sandbox"
-	case "daily":
-		return "/antigravity-daily"
-	case "cloudcode", "prod", "production", "":
-		return "/antigravity-cloudcode"
-	default:
-		return "/antigravity-cloudcode"
+		antigravitySandboxBaseURLDaily,
+		// antigravityBaseURLProd,
 	}
 }
 
@@ -1687,4 +1593,95 @@ func generateProjectID() string {
 	randSourceMutex.Unlock()
 	randomPart := strings.ToLower(uuid.NewString())[:5]
 	return adj + "-" + noun + "-" + randomPart
+}
+
+// getDenoProxyHost extracts Deno proxy host from auth configuration.
+func getDenoProxyHost(auth *cliproxyauth.Auth) string {
+	if auth == nil {
+		return ""
+	}
+
+	var denoHost string
+
+	// Check Attributes first (immutable config)
+	if auth.Attributes != nil {
+		denoHost = strings.TrimSpace(auth.Attributes["deno_proxy_host"])
+		if denoHost == "" {
+			denoHost = strings.TrimSpace(auth.Attributes["deno_host"])
+		}
+	}
+
+	// Check Metadata if not found in Attributes
+	if denoHost == "" && auth.Metadata != nil {
+		if v, ok := auth.Metadata["deno_proxy_host"].(string); ok {
+			denoHost = strings.TrimSpace(v)
+		}
+		if denoHost == "" {
+			if v, ok := auth.Metadata["deno_host"].(string); ok {
+				denoHost = strings.TrimSpace(v)
+			}
+		}
+	}
+
+	return denoHost
+}
+
+// applyDenoProxy converts a target URL to use Deno proxy if configured.
+// It dynamically selects the Deno path based on the target URL:
+//   - sandbox.googleapis.com -> /antigravity-sandbox
+//   - daily-cloudcode-pa.googleapis.com -> /antigravity-daily
+//   - cloudcode-pa.googleapis.com -> /antigravity-cloudcode
+func applyDenoProxy(auth *cliproxyauth.Auth, targetURL string) string {
+	denoHost := getDenoProxyHost(auth)
+	if denoHost == "" {
+		return targetURL
+	}
+
+	// Normalize denoHost to have https:// prefix
+	if !strings.HasPrefix(denoHost, "http://") && !strings.HasPrefix(denoHost, "https://") {
+		denoHost = "https://" + denoHost
+	}
+	denoHost = strings.TrimSuffix(denoHost, "/")
+
+	// Detect server type from target URL
+	serverType := detectServerTypeFromTargetURL(targetURL)
+	path := mapServerTypeToPath(serverType)
+
+	proxyURL := denoHost + path
+
+	// Log the Deno proxy forwarding
+	authID := ""
+	if auth != nil {
+		authID = auth.ID
+	}
+	log.Infof("deno proxy: forwarding request [auth=%s] from %s -> %s (server_type=%s)", authID, targetURL, proxyURL, serverType)
+
+	return proxyURL
+}
+
+// detectServerTypeFromTargetURL determines the server type based on the target URL.
+func detectServerTypeFromTargetURL(targetURL string) string {
+	urlLower := strings.ToLower(targetURL)
+	if strings.Contains(urlLower, "sandbox") {
+		return "sandbox"
+	}
+	if strings.Contains(urlLower, "daily-cloudcode-pa.googleapis.com") {
+		return "daily"
+	}
+	// Default to production (cloudcode)
+	return "cloudcode"
+}
+
+// mapServerTypeToPath converts server type to the corresponding Deno proxy path.
+func mapServerTypeToPath(serverType string) string {
+	switch strings.ToLower(strings.TrimSpace(serverType)) {
+	case "sandbox":
+		return "/antigravity-sandbox"
+	case "daily":
+		return "/antigravity-daily"
+	case "cloudcode", "prod", "production", "":
+		return "/antigravity-cloudcode"
+	default:
+		return "/antigravity-cloudcode"
+	}
 }
