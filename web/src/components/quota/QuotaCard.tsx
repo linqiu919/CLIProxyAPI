@@ -64,6 +64,7 @@ interface QuotaCardProps<TState extends QuotaStatusState> {
   cardClassName: string;
   defaultType: string;
   renderQuotaItems: (quota: TState, t: TFunction, helpers: QuotaRenderHelpers) => ReactNode;
+  fileNameBlurred?: boolean;
 }
 
 export function QuotaCard<TState extends QuotaStatusState>({
@@ -73,7 +74,8 @@ export function QuotaCard<TState extends QuotaStatusState>({
   i18nPrefix,
   cardClassName,
   defaultType,
-  renderQuotaItems
+  renderQuotaItems,
+  fileNameBlurred = false
 }: QuotaCardProps<TState>) {
   const { t } = useTranslation();
 
@@ -110,7 +112,12 @@ export function QuotaCard<TState extends QuotaStatusState>({
         >
           {getTypeLabel(displayType)}
         </span>
-        <span className={styles.fileName}>{item.name}</span>
+        <span
+          className={`${styles.fileName} ${fileNameBlurred ? styles.fileNameBlurred : ''}`}
+          title={item.name}
+        >
+          {item.name}
+        </span>
       </div>
 
       <div className={styles.quotaSection}>

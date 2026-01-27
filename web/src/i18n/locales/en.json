@@ -338,6 +338,8 @@
     "search_empty_desc": "Try changing the filters or clearing the search box.",
     "file_size": "Size",
     "file_modified": "Modified",
+    "show_filenames": "Show filenames",
+    "hide_filenames": "Hide filenames",
     "download_button": "Download",
     "delete_button": "Delete",
     "delete_confirm": "Are you sure you want to delete file",
@@ -774,7 +776,9 @@
     "title": "Quota Management",
     "description": "Monitor OAuth quota status for Antigravity, Codex, and Gemini CLI credentials.",
     "refresh_files": "Refresh auth files",
-    "refresh_files_and_quota": "Refresh files & quota"
+    "refresh_files_and_quota": "Refresh files & quota",
+    "view_grid": "Grid view",
+    "view_list": "List view"
   },
   "system_info": {
     "title": "Management Center Info",

@@ -41,6 +41,32 @@
   }
 }
 
+// 文件名模糊化
+.fileNameBlurred {
+  filter: blur(4px);
+  user-select: none;
+  transition: filter 0.2s ease;
+
+  &:hover {
+    filter: blur(2px);
+  }
+}
+
+// 眼睛图标按钮 - 使用与 .btn-sm 相同的 padding 以保持高度一致
+.eyeButton {
+  &:global(.btn.btn-sm) {
+    // padding: 8px 10px 与 .btn-sm 一致，但图标按钮使用正方形 padding
+    padding: 8px !important;
+    gap: 0 !important;
+
+    > span {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+  }
+}
+
 .titleWrapper {
   display: flex;
   align-items: center;
@@ -143,6 +169,122 @@
   display: flex;
   gap: $spacing-xs;
   align-items: center;
+}
+
+.listView {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-color);
+  border-radius: $radius-lg;
+  overflow: hidden;
+  background-color: var(--bg-primary);
+}
+
+.listCard {
+  padding: $spacing-sm $spacing-md;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: $spacing-md;
+  flex-wrap: nowrap;
+  border-bottom: 1px solid var(--border-color);
+  border-radius: 0;
+  box-shadow: none;
+  background-color: transparent;
+
+  &.fileCard {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    gap: $spacing-md;
+  }
+
+  &.fileCard:hover {
+    transform: none;
+    box-shadow: none;
+    border-color: var(--border-color);
+    background-color: var(--bg-secondary);
+  }
+
+  &:hover {
+    transform: none;
+    box-shadow: none;
+    border-color: var(--border-color);
+    background-color: var(--bg-secondary);
+  }
+
+  &:last-child {
+    border-bottom: none;
+  }
+
+  @include mobile {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+.listCard .cardHeader {
+  flex: 0 0 auto;
+  min-width: 200px;
+  justify-content: flex-start;
+  flex-wrap: nowrap;
+}
+
+.listCard .fileName {
+  max-width: 180px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.listCard .quotaSection {
+  flex: 1;
+  min-width: 0;
+  padding-top: 0;
+  margin-top: 0;
+  border-top: none;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: $spacing-md;
+
+  @include mobile {
+    min-width: 0;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .quotaRow {
+    display: flex;
+    flex-direction: column;
+    gap: $spacing-xs;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .quotaRowHeader {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: $spacing-xs;
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+  }
+
+  .quotaModel {
+    font-size: 12px;
+  }
+
+  .quotaMeta {
+    font-size: 11px;
+  }
+
+  .quotaBar {
+    height: 6px;
+    width: 100%;
+  }
 }
 
 .antigravityCard {

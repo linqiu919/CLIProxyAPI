@@ -338,6 +338,8 @@
     "search_empty_desc": "请调整筛选条件或清空搜索关键字再试一次。",
     "file_size": "大小",
     "file_modified": "修改时间",
+    "show_filenames": "显示文件名",
+    "hide_filenames": "隐藏文件名",
     "download_button": "下载",
     "delete_button": "删除",
     "delete_confirm": "确定要删除文件",
@@ -774,7 +776,9 @@
     "title": "配额管理",
     "description": "集中查看 OAuth 额度与剩余情况",
     "refresh_files": "刷新认证文件",
-    "refresh_files_and_quota": "刷新认证文件&额度"
+    "refresh_files_and_quota": "刷新认证文件&额度",
+    "view_grid": "方块视图",
+    "view_list": "列表视图"
   },
   "system_info": {
     "title": "管理中心信息",

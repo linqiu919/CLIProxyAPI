@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useInterval } from '@/hooks/useInterval';
 import { useHeaderRefresh } from '@/hooks/useHeaderRefresh';
+import { useLocalStorage } from '@/hooks/useLocalStorage';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
@@ -232,7 +233,10 @@ export function AuthFilesPage() {
   const [savingBatchDenoProxy, setSavingBatchDenoProxy] = useState(false);
 
   // 文件名模糊化
-  const [fileNameBlurred, setFileNameBlurred] = useState(false);
+  const [fileNameBlurred, setFileNameBlurred] = useLocalStorage<boolean>(
+    'auth_files_file_name_blurred',
+    false
+  );
 
   // 正在切换状态的文件
   const [togglingStatus, setTogglingStatus] = useState<string | null>(null);

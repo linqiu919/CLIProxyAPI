@@ -2,6 +2,65 @@
 
 ## [Unreleased]
 
+### Fixed - 配额管理页视图切换与眼睛按钮显示
+
+**原因：** 按页/全部切换需要合并为单一入口并支持文字提示，且切换为显示全部后眼睛按钮不应消失。
+
+**修改文件：**
+- `web/src/components/quota/QuotaSection.tsx`
+
+**变更内容：**
+- 按页/显示全部切换改为单个文字按钮，点击切换且按配置持久化。
+- 眼睛按钮不再依赖按页模式，始终可见。
+- 文件名模糊化切换不再受按页/全部限制。
+- 按页显示默认每页 14 条。
+
+---
+
+### Fixed - 管理端 APICall 502 返回错误细节
+
+**原因：** 便于排查上游连接失败的具体原因。
+
+**修改文件：**
+- `internal/api/handlers/management/api_tools.go`
+
+**变更内容：**
+- `APICall` 在请求失败返回 502 时增加 `detail` 字段，携带具体错误信息。
+
+---
+
+### Added - 配额管理页文件名模糊化与视图切换
+
+**原因：** 在配额管理页补齐文件名隐藏与视图切换能力，便于在不同浏览密度下查看配额信息。
+
+**修改文件：**
+- `web/src/components/quota/QuotaSection.tsx`
+- `web/src/components/quota/QuotaCard.tsx`
+- `web/src/pages/QuotaPage.module.scss`
+- `web/src/pages/AuthFilesPage.tsx`
+- `web/src/i18n/locales/zh-CN.json`
+- `web/src/i18n/locales/en.json`
+
+**变更内容：**
+1. **新增文件名模糊化状态与按钮：**
+   - QuotaSection 管理 `fileNameBlurred` 状态并持久化，仅在按页模式显示眼睛按钮
+   - AuthFilesPage 文件名模糊化开关同样持久化
+   - 复用 IconEye / IconEyeOff 切换逻辑与 title/aria-label 文案
+2. **卡片标题应用模糊化：**
+   - QuotaCard 根据传入状态为文件名追加 `fileNameBlurred` 样式类
+3. **新增视图切换：**
+   - QuotaSection 使用单一图标按钮在 grid/list 间切换并持久化，保持分页与加载逻辑不变
+   - 列表视图使用 listView/listCard 表格行样式展示更紧凑布局
+   - 列表视图中主题信息与配额同一行，左侧主题信息 + 右侧配额横排，模型/时间置于进度条上方并缩小进度条尺寸
+4. **样式复用与扩展：**
+   - 在 QuotaPage.module.scss 复刻 AuthFilesPage 的 `fileNameBlurred` 与 `eyeButton` 样式
+   - 新增列表视图布局样式
+5. **i18n 文案补全：**
+   - 在 `auth_files` 命名空间补充 show/hide 文件名提示文案
+   - 在 `quota_management` 命名空间补充 view_grid/view_list 文案
+
+---
+
 ### Fixed - 修复400等客户端错误时不应循环重试其他认证文件的问题
 
 **原因：** 当远程API返回400 (Bad Request) 等客户端错误时，原有逻辑会继续尝试所有其他认证文件。这是不正确的行为，因为400错误表示客户端请求本身有问题（如请求格式错误），切换认证文件无法解决问题。

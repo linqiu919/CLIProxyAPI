@@ -11,6 +11,13 @@
 > 关键技术：Go 1.24 + Gin；React 19 + Vite + TypeScript；Zustand 状态管理；管理 UI 内嵌到后端静态资源。
 
 
+## Notes
+- 管理端 `/v0/management/api-call` 在请求失败返回 502 时会增加 `detail` 字段携带底层错误信息。
+- Quota 管理页按页/全部切换为单个文字按钮并按配置持久化，默认每页 14 条。
+- Quota 管理页文件名模糊化切换按钮不再依赖按页模式，始终可见且状态持久化。
+- Quota 管理页支持网格/列表视图切换并持久化，列表视图为表格行样式（主题信息与配额同一行，左侧主题信息 + 右侧配额横排，模型/时间置于进度条上方），使用单个图标按钮切换。
+- 认证文件页文件名模糊化开关与配额页一致做持久化。
+- 文件名模糊化样式与眼睛按钮样式复用 AuthFilesPage 的交互语义，i18n 仍挂在 auth_files 命名空间。
 
 ## Dependencies (init from programming language specification like package.json, requirements.txt, etc.)
 

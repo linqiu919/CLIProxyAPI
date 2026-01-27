@@ -8,6 +8,7 @@ import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { triggerHeaderRefresh } from '@/hooks/useHeaderRefresh';
+import { useLocalStorage } from '@/hooks/useLocalStorage';
 import { useQuotaStore, useThemeStore } from '@/stores';
 import type { AuthFileItem, ResolvedTheme } from '@/types';
 import { QuotaCard } from './QuotaCard';
@@ -15,7 +16,7 @@ import type { QuotaStatusState } from './QuotaCard';
 import { useQuotaLoader } from './useQuotaLoader';
 import type { QuotaConfig } from './quotaConfigs';
 import { useGridColumns } from './useGridColumns';
-import { IconRefreshCw } from '@/components/ui/icons';
+import { IconEye, IconEyeOff, IconRefreshCw, IconLayoutDashboard, IconScrollText } from '@/components/ui/icons';
 import styles from '@/pages/QuotaPage.module.scss';
 
 type QuotaUpdater<T> = T | ((prev: T) => T);
@@ -23,6 +24,8 @@ type QuotaUpdater<T> = T | ((prev: T) => T);
 type QuotaSetter<T> = (updater: QuotaUpdater<T>) => void;
 
 type ViewMode = 'paged' | 'all';
+
+type ViewType = 'grid' | 'list';
 
 const MAX_ITEMS_PER_PAGE = 14;
 const MAX_SHOW_ALL_THRESHOLD = 30;
@@ -111,8 +114,16 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
 
   /* Removed useRef */
   const [columns, gridRef] = useGridColumns(380); // Min card width 380px matches SCSS
-  const [viewMode, setViewMode] = useState<ViewMode>('paged');
+  const [viewMode, setViewMode] = useLocalStorage<ViewMode>(
+    `quota_view_mode_${config.type}`,
+    'paged'
+  );
+  const [viewType, setViewType] = useLocalStorage<ViewType>('quota_view_type', 'grid');
   const [showTooManyWarning, setShowTooManyWarning] = useState(false);
+  const [fileNameBlurred, setFileNameBlurred] = useLocalStorage<boolean>(
+    'quota_file_name_blurred',
+    false
+  );
 
   const filteredFiles = useMemo(() => files.filter((file) => config.filterFn(file)), [
     files,
@@ -224,24 +235,65 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
             <Button
               variant={effectiveViewMode === 'paged' ? 'primary' : 'secondary'}
               size="sm"
-              onClick={() => setViewMode('paged')}
-            >
-              {t('auth_files.view_mode_paged')}
-            </Button>
-            <Button
-              variant={effectiveViewMode === 'all' ? 'primary' : 'secondary'}
-              size="sm"
               onClick={() => {
-                if (filteredFiles.length > MAX_SHOW_ALL_THRESHOLD) {
-                  setShowTooManyWarning(true);
+                if (effectiveViewMode === 'paged') {
+                  if (filteredFiles.length > MAX_SHOW_ALL_THRESHOLD) {
+                    setShowTooManyWarning(true);
+                  } else {
+                    setViewMode('all');
+                  }
                 } else {
-                  setViewMode('all');
+                  setViewMode('paged');
                 }
               }}
+              title={
+                effectiveViewMode === 'paged'
+                  ? t('auth_files.view_mode_all')
+                  : t('auth_files.view_mode_paged')
+              }
+              aria-label={
+                effectiveViewMode === 'paged'
+                  ? t('auth_files.view_mode_all')
+                  : t('auth_files.view_mode_paged')
+              }
             >
-              {t('auth_files.view_mode_all')}
+              {effectiveViewMode === 'paged'
+                ? t('auth_files.view_mode_paged')
+                : t('auth_files.view_mode_all')}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setViewType(viewType === 'grid' ? 'list' : 'grid')}
+              className={styles.eyeButton}
+              title={
+                viewType === 'grid'
+                  ? t('quota_management.view_list', { defaultValue: '列表视图' })
+                  : t('quota_management.view_grid', { defaultValue: '方块视图' })
+              }
+              aria-label={
+                viewType === 'grid'
+                  ? t('quota_management.view_list', { defaultValue: '列表视图' })
+                  : t('quota_management.view_grid', { defaultValue: '方块视图' })
+              }
+            >
+              {viewType === 'grid' ? <IconScrollText size={16} /> : <IconLayoutDashboard size={16} />}
             </Button>
           </div>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setFileNameBlurred(!fileNameBlurred)}
+            className={styles.eyeButton}
+            title={fileNameBlurred
+              ? t('auth_files.show_filenames', { defaultValue: '显示文件名' })
+              : t('auth_files.hide_filenames', { defaultValue: '隐藏文件名' })}
+            aria-label={fileNameBlurred
+              ? t('auth_files.show_filenames', { defaultValue: '显示文件名' })
+              : t('auth_files.hide_filenames', { defaultValue: '隐藏文件名' })}
+          >
+            {fileNameBlurred ? <IconEyeOff size={16} /> : <IconEye size={16} />}
+          </Button>
           <Button
             variant="secondary"
             size="sm"
@@ -263,7 +315,10 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
         />
       ) : (
         <>
-          <div ref={gridRef} className={config.gridClassName}>
+          <div
+            ref={gridRef}
+            className={viewType === 'list' ? styles.listView : config.gridClassName}
+          >
             {pageItems.map((item) => (
               <QuotaCard
                 key={item.name}
@@ -271,9 +326,10 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
                 quota={quota[item.name]}
                 resolvedTheme={resolvedTheme}
                 i18nPrefix={config.i18nPrefix}
-                cardClassName={config.cardClassName}
+                cardClassName={viewType === 'list' ? styles.listCard : config.cardClassName}
                 defaultType={config.type}
                 renderQuotaItems={config.renderQuotaItems}
+                fileNameBlurred={fileNameBlurred}
               />
             ))}
           </div>
